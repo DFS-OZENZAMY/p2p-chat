@@ -1,9 +1,11 @@
 # P2P Chat — messagerie chiffrée, de téléphone à téléphone
 
 Les messages et les **appels audio/vidéo** passent **directement d'un appareil à l'autre** (WebRTC), chiffrés de bout en bout.
-Le seul serveur est un **annuaire** (Cloudflare Worker + D1) : noms, clés publiques et échange de la poignée de main WebRTC. Aucun message n'y transite ni n'y est stocké.
+Le seul serveur est un **annuaire** (Cloudflare Worker + D1) : noms, clés publiques, poignée de main WebRTC, notifications, et une boîte aux lettres pour les messages destinés à un contact hors ligne — toujours chiffrés de bout en bout, illisibles pour le serveur.
 
 **Site et téléchargement : https://dfs-ozenzamy.github.io/p2p-chat/**
+
+**Maquettes UX/UI (Figma) : https://www.figma.com/design/fchrGdrWZ4CSTaMXNvYoON**
 
 | Plateforme | Forme | Installation |
 |---|---|---|
@@ -58,13 +60,21 @@ Ouvre http://localhost:8080, saisis `http://localhost:8787` comme serveur annuai
 Distribuer une app native iPhone exige un compte Apple Developer payant, un Mac pour signer et la validation de l'App Store.
 La version web installable évite tout cela et s'utilise comme une app (icône, plein écran, hors-ligne pour l'interface).
 
+## Notifications et app fermée (app web)
+- **Messages** : si la connexion directe n'est pas établie en 3 s, le message (déjà chiffré de bout en bout) est déposé dans une boîte aux lettres sur l'annuaire (`/mailbox/*`, table `mailbox`), puis supprimé dès que le destinataire le récupère (30 jours max).
+- **Notifications** : Web Push standard (RFC 8291 + VAPID, `worker/src/push.ts`, sans dépendance). Le texte est déchiffré sur le téléphone par le service worker (`web/sw.js`).
+- **Appels** : si l'appelé n'est pas connecté, l'annuaire envoie une notification « X t'appelle » (Répondre / Refuser) et garde l'offre 60 s pour la livrer à l'ouverture de l'app.
+- **Mise en service** : `npm run setup-db` (nouvelles tables) puis `npm run vapid` (clé des notifications), puis `npx wrangler deploy`.
+- Sur iPhone : iOS 16.4+ et app ajoutée à l'écran d'accueil.
+
 ## Appels audio et vidéo (app web)
+- Qualité : jusqu'à 1080p / 30 i/s, 3,5 Mbit/s max (adaptatif), Opus 48 kHz 64 kbit/s avec correction d'erreurs.
 - Une connexion WebRTC dédiée par appel ; le son et l'image sont chiffrés par WebRTC (DTLS-SRTP).
 - L'offre et la réponse SDP, qui portent l'empreinte DTLS, sont chiffrées avec la clé E2E du contact : l'annuaire ne peut pas détourner l'appel.
 - Signaux `call-offer`, `call-answer`, `call-ice`, `call-end`, `call-busy` (voir `web/call.js`). L'app Android native les ignore pour l'instant.
 
 ## Limites connues
-- **Les deux apps doivent être ouvertes** : pas de service en arrière-plan ni de notifications push (FCM / Web Push à ajouter).
+- **App Android native** : pas encore de notifications push ni d'appels (l'app web, elle, les gère).
 - **Pas de forward secrecy** : X25519 statique + AES-GCM. Remplacer par libsignal (Double Ratchet).
 - **Clés TOFU** : la clé d'un contact est mémorisée à la 1re vue. Ajouter une vérification (numéro de sécurité / QR).
 - **TURN** : l'annuaire fournit des identifiants Cloudflare TURN (`GET /ice`) si les secrets `TURN_KEY_ID` et `TURN_KEY_API_TOKEN` sont définis (`npx wrangler secret put …`). L'app Android utilise encore STUN seul (`Config.kt`).
