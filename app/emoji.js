@@ -61,7 +61,7 @@ const EMO = (() => {
   }
 
   function burst(fx) {
-    if (!fx || reduceMotion() || !Element.prototype.animate) return;
+    if (!fx || reduceMotion() || !Element.prototype.animate || document.documentElement.dataset.fx === "off") return;
     const layer = document.createElement("div");
     layer.className = "fx-layer";
     layer.setAttribute("aria-hidden", "true");
