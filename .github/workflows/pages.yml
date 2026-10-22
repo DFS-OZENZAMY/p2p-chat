@@ -1,0 +1,45 @@
+name: Site et app web
+
+on:
+  push:
+    branches: [main]
+    paths: ["site/**", "web/**", ".github/workflows/pages.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Assembler le site
+        env:
+          DIRECTORY_URL: ${{ vars.DIRECTORY_URL }}
+          REPO: ${{ github.repository }}
+        run: |
+          mkdir -p _site/app
+          cp -r site/. _site/
+          cp -r web/. _site/app/
+          node -e 'const fs=require("fs");fs.writeFileSync("_site/app/config.js","window.P2P_CONFIG = "+JSON.stringify({directoryUrl:process.env.DIRECTORY_URL||""})+";\n")'
+          sed -i "s/__VERSION__/${GITHUB_SHA::8}/" _site/app/sw.js
+          grep -rl "__REPO__" _site | xargs -r sed -i "s#__REPO__#$REPO#g"
+          touch _site/.nojekyll
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+      - id: deployment
+        uses: actions/deploy-pages@v4

@@ -1,0 +1,10 @@
+{
+  "name": "p2p-chat-directory",
+  "private": true,
+  "scripts": { "dev": "wrangler dev", "deploy": "wrangler deploy", "check": "tsc --noEmit" },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20261019.1",
+    "typescript": "^5.6.0",
+    "wrangler": "^4.0.0"
+  }
+}

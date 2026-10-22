@@ -1,0 +1,15 @@
+name = "p2p-chat-directory"
+main = "src/index.ts"
+compatibility_date = "2026-10-01"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "p2p-chat"
+database_id = "REMPLACE_PAR_TON_ID"
+
+[durable_objects]
+bindings = [{ name = "HUB", class_name = "Hub" }]
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Hub"]
