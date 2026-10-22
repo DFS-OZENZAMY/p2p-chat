@@ -1,6 +1,6 @@
 // Garde l'interface disponible hors connexion. Les messages ne passent jamais par ici.
 const CACHE = "p2p-chat-__VERSION__";
-const SHELL = ["./", "index.html", "app.css", "app.js", "crypto.js", "config.js", "vendor/nacl-fast.min.js",
+const SHELL = ["./", "index.html", "app.css", "app.js", "call.js", "crypto.js", "config.js", "vendor/nacl-fast.min.js",
   "manifest.webmanifest", "icons/icon.svg", "icons/icon-192.png", "icons/apple-touch-icon.png"];
 
 self.addEventListener("install", (e) => {

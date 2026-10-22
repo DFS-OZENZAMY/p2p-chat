@@ -1,6 +1,6 @@
 # P2P Chat — messagerie chiffrée, de téléphone à téléphone
 
-Les messages passent **directement d'un appareil à l'autre** (WebRTC DataChannel), chiffrés de bout en bout.
+Les messages et les **appels audio/vidéo** passent **directement d'un appareil à l'autre** (WebRTC), chiffrés de bout en bout.
 Le seul serveur est un **annuaire** (Cloudflare Worker + D1) : noms, clés publiques et échange de la poignée de main WebRTC. Aucun message n'y transite ni n'y est stocké.
 
 **Site et téléchargement : https://dfs-ozenzamy.github.io/p2p-chat/**
@@ -57,6 +57,11 @@ Ouvre http://localhost:8080, saisis `http://localhost:8787` comme serveur annuai
 ## Pourquoi pas une app iOS native ?
 Distribuer une app native iPhone exige un compte Apple Developer payant, un Mac pour signer et la validation de l'App Store.
 La version web installable évite tout cela et s'utilise comme une app (icône, plein écran, hors-ligne pour l'interface).
+
+## Appels audio et vidéo (app web)
+- Une connexion WebRTC dédiée par appel ; le son et l'image sont chiffrés par WebRTC (DTLS-SRTP).
+- L'offre et la réponse SDP, qui portent l'empreinte DTLS, sont chiffrées avec la clé E2E du contact : l'annuaire ne peut pas détourner l'appel.
+- Signaux `call-offer`, `call-answer`, `call-ice`, `call-end`, `call-busy` (voir `web/call.js`). L'app Android native les ignore pour l'instant.
 
 ## Limites connues
 - **Les deux apps doivent être ouvertes** : pas de service en arrière-plan ni de notifications push (FCM / Web Push à ajouter).

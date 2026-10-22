@@ -123,7 +123,8 @@ function setPeerStatus(id, s) {
 function handleSignal(m) {
   const from = m.from;
   if (!from || !state.me) return;
-  if (m.type === "offline") { setPeerStatus(from, "offline"); return; }
+  if (m.type === "offline") { setPeerStatus(from, "offline"); if (window.onCallSignal) window.onCallSignal(m); return; }
+  if (typeof m.type === "string" && m.type.startsWith("call-")) { if (window.onCallSignal) window.onCallSignal(m); return; }
   if (m.type === "offer") {
     const old = sessions.get(from);
     if (old && old.isCaller && state.me.id < from) return; // conflit : je reste l'appelant (même règle qu'Android)
@@ -238,7 +239,7 @@ async function flush(peerId) {
     const c = await contactFor(peerId);
     if (!c) return;
     const k = await keyFor(c);
-    const pending = (await msgsFor(peerId)).filter((m) => m.outgoing && !m.sent);
+    const pending = (await msgsFor(peerId)).filter((m) => m.outgoing && !m.sent && !m.kind);
     for (const m of pending) {
       const plain = enc.encode(JSON.stringify({ id: m.id, ts: m.ts, text: m.text }));
       const ct = await E2E.encrypt(k, plain);
@@ -332,6 +333,8 @@ const svg = (path) => {
 };
 const ICON_BACK = '<path d="M15 5l-7 7 7 7"/>';
 const ICON_GEAR = '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>';
+const ICON_CALL = '<path d="M5 4h4l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2"/>';
+const ICON_CAM = '<rect x="3" y="6" width="13" height="12" rx="2"/><path d="M16 10l5-3v10l-5-3"/>';
 const ICON_SEND = '<path d="M5 12h13M13 6l6 6-6 6"/>';
 const MARK = '<svg class="mark" viewBox="0 0 64 64" aria-hidden="true"><rect x="4" y="10" width="20" height="40" rx="5" fill="none" stroke="currentColor" stroke-width="3"/><rect x="40" y="14" width="20" height="40" rx="5" fill="none" stroke="currentColor" stroke-width="3"/><path d="M24 31h16" stroke="var(--line)" stroke-width="4" stroke-linecap="round"/></svg>';
 
@@ -445,7 +448,9 @@ function renderChat() {
   root.replaceChildren(
     h("header", { class: "bar" },
       h("button", { class: "icon-btn", "aria-label": "Retour aux contacts", onclick: () => history.back() }, svg(ICON_BACK)),
-      h("div", { class: "peer-title" }, h("h2", {}, c.username), statusEl)),
+      h("div", { class: "peer-title" }, h("h2", {}, c.username), statusEl),
+      h("button", { class: "icon-btn", "aria-label": "Appel audio", title: "Appel audio", onclick: () => window.startCall && window.startCall(c, false) }, svg(ICON_CALL)),
+      h("button", { class: "icon-btn", "aria-label": "Appel vidéo", title: "Appel vidéo", onclick: () => window.startCall && window.startCall(c, true) }, svg(ICON_CAM))),
     threadEl, form,
   );
   renderStatus();
@@ -474,7 +479,9 @@ async function renderThread() {
   const fmt = new Intl.DateTimeFormat("fr", { hour: "2-digit", minute: "2-digit" });
   threadEl.replaceChildren(
     ...(ms.length ? [] : [h("p", { class: "note" }, "Les messages passent uniquement entre vos deux appareils. Ils doivent être ouverts tous les deux pour que le message parte.")]),
-    ...ms.map((m) => h("div", { class: "msg " + (m.outgoing ? "out" : "in") }, m.text,
+    ...ms.map((m) => m.kind === "call"
+      ? h("p", { class: "call-log" }, m.text + " · " + fmt.format(m.ts))
+      : h("div", { class: "msg " + (m.outgoing ? "out" : "in") }, m.text,
       h("time", {}, fmt.format(m.ts) + (m.outgoing && !m.sent ? " · en attente" : "")))),
   );
   threadEl.scrollTop = threadEl.scrollHeight;

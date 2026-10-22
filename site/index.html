@@ -114,7 +114,7 @@
     <header class="hero">
       <div>
         <h1>Des messages qui vont directement d'un téléphone à l'autre.</h1>
-        <p>Chiffrés de bout en bout sur ton appareil, envoyés sans passer par un serveur. Personne d'autre que ton contact ne peut les lire.</p>
+        <p>Messages, appels audio et appels vidéo, chiffrés de bout en bout et envoyés sans passer par un serveur. Personne d'autre que ton contact ne peut les lire ni les écouter.</p>
         <div class="ctas">
           <a class="btn primary" href="#installer">Installer l'app</a>
           <a class="btn" href="#fonctionnement">Comment ça marche</a>
@@ -182,6 +182,7 @@
         <div><dt>Ton téléphone crée tes clés</dt><dd>À l'inscription, ton appareil génère une paire de clés. La clé privée ne quitte jamais ton téléphone ; seule la clé publique est publiée, avec ton nom d'utilisateur.</dd></div>
         <div><dt>L'annuaire sert à se trouver</dt><dd>Un petit serveur garde les noms et clés publiques, et transmet la poignée de main qui permet aux deux téléphones de se connecter. Il ne voit et ne stocke aucun message.</dd></div>
         <div><dt>Les messages partent en direct</dt><dd>Une fois connectés (WebRTC), les deux téléphones échangent les messages chiffrés (X25519 + AES-256-GCM) sans intermédiaire. L'historique reste sur ton appareil.</dd></div>
+        <div><dt>Les appels aussi</dt><dd>Le son et l'image circulent directement entre les deux appareils, chiffrés par WebRTC. La négociation de l'appel est elle-même chiffrée avec la clé de ton contact, pour que l'annuaire ne puisse pas s'intercaler.</dd></div>
       </dl>
     </section>
 
@@ -189,7 +190,8 @@
       <h2>Bon à savoir</h2>
       <ul>
         <li><span><strong>Les deux apps doivent être ouvertes</strong> pour qu'un message parte. Sinon il attend sur ton téléphone et s'envoie dès que ton contact revient.</span></li>
-        <li><span><strong>Pas de notifications</strong> pour l'instant : l'app ne se réveille pas en arrière-plan.</span></li>
+        <li><span><strong>Pas de notifications</strong> pour l'instant : l'app ne se réveille pas en arrière-plan. Pour recevoir un appel, l'app doit être ouverte.</span></li>
+        <li><span><strong>Les appels audio et vidéo</strong> sont disponibles dans l'app web (iPhone, Android, ordinateur). L'APK Android ne les gère pas encore.</span></li>
         <li><span><strong>Certains réseaux mobiles</strong> bloquent les connexions directes ; la connexion peut alors échouer tant qu'aucun serveur relais n'est ajouté.</span></li>
         <li><span><strong>Projet en version 0.1</strong> : le chiffrement n'a pas encore de confidentialité persistante et n'a pas été audité.</span></li>
       </ul>
