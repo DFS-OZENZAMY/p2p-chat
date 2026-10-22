@@ -3,7 +3,7 @@
 importScripts("config.js", "vendor/nacl-fast.min.js", "crypto.js");
 
 const CACHE = "p2p-chat-__VERSION__";
-const SHELL = ["./", "index.html", "app.css", "app.js", "call.js", "crypto.js", "config.js", "vendor/nacl-fast.min.js",
+const SHELL = ["./", "index.html", "app.css", "app.js", "call.js", "crypto.js", "emoji.js", "emoji-fr.js", "config.js", "vendor/nacl-fast.min.js",
   "manifest.webmanifest", "icons/icon.svg", "icons/icon-192.png", "icons/badge-96.png", "icons/apple-touch-icon.png"];
 
 self.addEventListener("install", (e) => {
@@ -81,6 +81,8 @@ async function decryptPreview(data) {
   try {
     const k = await E2E.deriveKey(me.priv, me.pubB64, pub);
     const j = JSON.parse(new TextDecoder().decode(await E2E.decrypt(k, E2E.unb64(data.ct))));
+    if (typeof j.react === "string") return j.react ? "a réagi " + j.react + " à ton message" : null;
+    if (typeof j.text !== "string") return null;
     // On range le message tout de suite : il s'affichera à l'ouverture de l'app
     if (known && !(await idbGet("msgs", String(j.id)))) {
       await idbPut("msgs", { id: String(j.id), peerId: data.from, text: String(j.text), ts: Number(j.ts) || Date.now(), outgoing: false, sent: true, unread: true });

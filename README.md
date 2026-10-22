@@ -67,6 +67,12 @@ La version web installable évite tout cela et s'utilise comme une app (icône, 
 - **Mise en service** : `npm run setup-db` (nouvelles tables) puis `npm run vapid` (clé des notifications), puis `npx wrangler deploy`.
 - Sur iPhone : iOS 16.4+ et app ajoutée à l'écran d'accueil.
 
+## Emoji (app web)
+- Clavier d'emoji (`web/emoji.js`) : ~1 900 emoji Unicode ≤ 15, recherche en français, récents, couleur de peau. Données `web/emoji-fr.js` générées depuis emojibase-data (MIT), chargées à la demande.
+- Message composé de 1 à 3 emoji : affiché en grand et animé (cœur qui bat, main qui salue…).
+- Effets plein écran (🎉 ❤️ 🔥 🎂 🚀 …) chez l'expéditeur et le destinataire.
+- Réactions (appui long / double-tap ❤️) : envoyées chiffrées comme un message `{id, ts, react, target}` (sans `text`, l'app Android les ignore).
+
 ## Appels audio et vidéo (app web)
 - Qualité : jusqu'à 1080p / 30 i/s, 3,5 Mbit/s max (adaptatif), Opus 48 kHz 64 kbit/s avec correction d'erreurs.
 - Une connexion WebRTC dédiée par appel ; le son et l'image sont chiffrés par WebRTC (DTLS-SRTP).

@@ -273,3 +273,114 @@ dialog p { margin: 0; }
 .glass-bar { align-self: center; padding: 12px 14px; border-radius: 44px; background: rgb(12 34 40 / .45); -webkit-backdrop-filter: blur(24px); backdrop-filter: blur(24px); }
 .glass-bar .call-btn { width: 56px; height: 56px; }
 .glass-bar .call-btn svg { width: 24px; height: 24px; }
+
+/* ================= Emoji ================= */
+.emoji-font, .emoji-cell, .emoji-tab, .je, .rb-emoji, .reacts, .fx-layer span, .pop-heart, .emoji-tone {
+  font-family: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", "Twemoji Mozilla", sans-serif;
+}
+.composer .emoji-toggle { color: var(--muted); width: 40px; height: 40px; }
+.composer .emoji-toggle[aria-expanded="true"] { color: var(--accent); }
+
+/* Clavier d'emoji */
+.emoji-panel { height: min(44vh, 330px); display: flex; flex-direction: column; background: var(--surface); border-top: 1px solid var(--rule);
+  padding-bottom: env(safe-area-inset-bottom, 0px); }
+.emoji-panel.compact { height: min(52vh, 360px); border: 0; padding-bottom: 0; }
+.emoji-head { display: flex; gap: 8px; align-items: center; padding: 10px 10px 6px; }
+.emoji-search { flex: 1; display: flex; }
+.emoji-search input { flex: 1; min-width: 0; border: 0; outline: none; border-radius: 10px; padding: 9px 12px; background: var(--field); color: var(--ink); }
+.emoji-search input:focus { box-shadow: 0 0 0 2px var(--accent); }
+.emoji-tone { appearance: none; border: 0; background: var(--field); width: 40px; height: 38px; border-radius: 10px; font-size: 20px; cursor: pointer; }
+.emoji-tabs { display: flex; gap: 2px; padding: 0 6px 4px; overflow-x: auto; scrollbar-width: none; border-bottom: 1px solid var(--rule); }
+.emoji-tabs::-webkit-scrollbar { display: none; }
+.emoji-tab { appearance: none; border: 0; background: transparent; font-size: 19px; padding: 5px 7px 6px; border-radius: 8px; cursor: pointer; opacity: .5; filter: grayscale(.6); transition: opacity .15s, filter .15s; border-bottom: 2px solid transparent; }
+.emoji-tab.on { opacity: 1; filter: none; border-bottom-color: var(--accent); border-radius: 8px 8px 0 0; }
+.emoji-grid { flex: 1; overflow-y: auto; padding: 4px 6px 10px; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; }
+.emoji-sec h3 { margin: 10px 6px 4px; font: 600 12px var(--body); color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+.emoji-cells { display: grid; grid-template-columns: repeat(auto-fill, minmax(42px, 1fr)); }
+.emoji-cell { appearance: none; border: 0; background: transparent; font-size: 28px; line-height: 1; padding: 6px 0; border-radius: 10px; cursor: pointer; }
+.emoji-cell:hover, .emoji-cell:focus-visible { background: var(--field); }
+.emoji-cell:active { transform: scale(1.25); }
+.emoji-none { color: var(--muted); padding: 18px 8px; margin: 0; }
+
+/* Gros emoji (message composé uniquement d'emoji) */
+.bubble.bare { background: transparent !important; border: 0 !important; padding: 0 2px; }
+.bubble.bare .meta { padding: 0 4px; }
+.jumbo { display: inline-flex; gap: 2px; line-height: 1.05; white-space: nowrap; }
+.jumbo.j1 { font-size: 64px; }
+.jumbo.j2 { font-size: 52px; }
+.jumbo.j3 { font-size: 44px; }
+.je { display: inline-block; transform-origin: 50% 70%; }
+@media (prefers-reduced-motion: no-preference) {
+  .je { animation: e-pop .55s cubic-bezier(.2,1.6,.4,1) both; }
+  .je.a-beat { animation: e-pop .55s cubic-bezier(.2,1.6,.4,1) both, e-beat 1.2s ease-in-out .6s infinite; }
+  .je.a-laugh { animation: e-pop .55s both, e-laugh .9s ease-in-out .6s infinite; }
+  .je.a-wave { transform-origin: 70% 80%; animation: e-pop .55s both, e-wave 1.6s ease-in-out .6s infinite; }
+  .je.a-flicker { transform-origin: 50% 100%; animation: e-pop .55s both, e-flicker 1.1s ease-in-out .6s infinite; }
+  .je.a-party { animation: e-pop .55s both, e-party 1.4s ease-in-out .6s infinite; }
+  .je.a-twinkle { animation: e-pop .55s both, e-twinkle 1.6s ease-in-out .6s infinite; }
+  .je.a-launch { animation: e-pop .55s both, e-launch 2.2s ease-in-out .6s infinite; }
+  .je.a-sob { animation: e-pop .55s both, e-sob 2s ease-in-out .6s infinite; }
+  .je.a-rage { animation: e-pop .55s both, e-rage .35s linear .6s infinite; }
+  .je.a-nod { transform-origin: 50% 90%; animation: e-pop .55s both, e-nod 1.3s ease-in-out .6s infinite; }
+  .je.a-shock { animation: e-pop .55s both, e-shock 1.5s ease-in-out .6s infinite; }
+  .je.a-sleep { animation: e-pop .55s both, e-sleep 3s ease-in-out .6s infinite; }
+  .je.a-think { animation: e-pop .55s both, e-think 2.4s ease-in-out .6s infinite; }
+  .je.a-shiver { animation: e-pop .55s both, e-shiver .18s linear .6s infinite; }
+  .je.a-swag { animation: e-pop .55s both, e-swag 2.4s ease-in-out .6s infinite; }
+}
+@keyframes e-pop { 0% { transform: scale(0) rotate(-20deg); opacity: 0; } 100% { transform: scale(1) rotate(0); opacity: 1; } }
+@keyframes e-beat { 0%, 100% { transform: scale(1); } 15% { transform: scale(1.18); } 30% { transform: scale(1); } 45% { transform: scale(1.12); } 60% { transform: scale(1); } }
+@keyframes e-laugh { 0%, 100% { transform: rotate(0) translateY(0); } 25% { transform: rotate(-9deg) translateY(-3px); } 75% { transform: rotate(9deg) translateY(-3px); } }
+@keyframes e-wave { 0%, 60%, 100% { transform: rotate(0); } 10%, 30% { transform: rotate(18deg); } 20%, 40% { transform: rotate(-12deg); } }
+@keyframes e-flicker { 0%, 100% { transform: scale(1, 1) skewX(0); } 25% { transform: scale(1.04, 1.1) skewX(-3deg); } 50% { transform: scale(.97, .95) skewX(2deg); } 75% { transform: scale(1.03, 1.08) skewX(-1deg); } }
+@keyframes e-party { 0%, 100% { transform: rotate(0) scale(1); } 20% { transform: rotate(-14deg) scale(1.1); } 40% { transform: rotate(12deg) scale(1.05); } 60% { transform: rotate(-6deg); } }
+@keyframes e-twinkle { 0%, 100% { transform: scale(1) rotate(0); filter: brightness(1); } 50% { transform: scale(1.18) rotate(20deg); filter: brightness(1.3); } }
+@keyframes e-launch { 0%, 100% { transform: translate(0, 0) rotate(0); } 40% { transform: translate(6px, -14px) rotate(6deg); } 50% { transform: translate(-2px, -10px) rotate(-3deg); } 70% { transform: translate(3px, -4px); } }
+@keyframes e-sob { 0%, 100% { transform: translateY(0) scale(1); } 30% { transform: translateY(2px) scale(1.03, .95); } 60% { transform: translateY(-1px) scale(.98, 1.03); } }
+@keyframes e-rage { 0%, 100% { transform: translateX(0) rotate(0); } 25% { transform: translateX(-2px) rotate(-2deg); } 75% { transform: translateX(2px) rotate(2deg); } }
+@keyframes e-nod { 0%, 100% { transform: rotate(0) translateY(0); } 30% { transform: rotate(-10deg) translateY(-4px); } 55% { transform: rotate(0) translateY(0); } }
+@keyframes e-shock { 0%, 70%, 100% { transform: scale(1); } 10% { transform: scale(1.25); } 20% { transform: scale(.95); } 30% { transform: scale(1.05); } }
+@keyframes e-sleep { 0%, 100% { transform: translateY(0) rotate(-3deg); } 50% { transform: translateY(-5px) rotate(3deg); } }
+@keyframes e-think { 0%, 100% { transform: rotate(0); } 50% { transform: rotate(-10deg) translateX(-3px); } }
+@keyframes e-shiver { 0%, 100% { transform: translateX(0); } 50% { transform: translateX(1.5px); } }
+@keyframes e-swag { 0%, 100% { transform: rotate(0) translateY(0); } 25% { transform: rotate(-8deg) translateY(-3px); } 50% { transform: rotate(0) translateY(0); } 75% { transform: rotate(8deg) translateY(-3px); } }
+
+/* Réactions sur les bulles */
+.bubble { position: relative; -webkit-touch-callout: none; user-select: none; -webkit-user-select: none; touch-action: manipulation; }
+.bubble.has-reacts { margin-bottom: 14px; }
+.reacts { position: absolute; bottom: -16px; display: inline-flex; align-items: center; gap: 1px; padding: 2px 6px; border-radius: 999px;
+  background: var(--surface); border: 1px solid var(--rule); font-size: 15px; line-height: 1.2; cursor: pointer; box-shadow: 0 2px 6px rgb(0 0 0 / .08); }
+.reacts small { font: 600 11px var(--body); color: var(--muted); margin-left: 2px; }
+.bubble.out .reacts { right: 8px; }
+.bubble.in .reacts { left: 8px; }
+.bubble.lifted { z-index: 61; transform: scale(1.03); box-shadow: 0 10px 30px rgb(0 0 0 / .18); transition: transform .15s; }
+@media (prefers-reduced-motion: no-preference) {
+  .reacts { animation: e-pop .4s cubic-bezier(.2,1.6,.4,1) both; }
+}
+.pop-heart { position: absolute; left: 50%; top: 50%; font-size: 54px; pointer-events: none; transform: translate(-50%, -50%);
+  animation: heart-pop .85s cubic-bezier(.2,1.4,.4,1) forwards; z-index: 2; }
+@keyframes heart-pop { 0% { transform: translate(-50%, -50%) scale(0); opacity: 0; } 30% { transform: translate(-50%, -50%) scale(1.25); opacity: 1; } 60% { transform: translate(-50%, -60%) scale(1); opacity: 1; } 100% { transform: translate(-50%, -110%) scale(.7); opacity: 0; } }
+
+.react-layer { position: fixed; inset: 0; z-index: 60; }
+.react-veil { position: absolute; inset: 0; background: rgb(8 20 24 / .28); -webkit-backdrop-filter: blur(2px); backdrop-filter: blur(2px); }
+.react-bar { position: fixed; background: var(--surface); border: 1px solid var(--rule); border-radius: 22px; padding: 8px; box-shadow: 0 14px 40px rgb(0 0 0 / .22); display: grid; gap: 6px; z-index: 62; }
+.react-bar.expanded { top: auto !important; bottom: calc(env(safe-area-inset-bottom, 0px) + 10px); left: 8px !important; right: 8px; width: auto !important; }
+.rb-row { display: flex; align-items: center; justify-content: space-between; }
+.rb-emoji { appearance: none; border: 0; background: transparent; font-size: 30px; width: 44px; height: 44px; border-radius: 50%; cursor: pointer; transition: transform .12s; }
+.rb-emoji:hover, .rb-emoji:focus-visible { transform: scale(1.25); }
+.rb-emoji.on { background: var(--accent-soft); }
+.rb-more { appearance: none; border: 0; width: 38px; height: 38px; border-radius: 50%; background: var(--field); color: var(--muted); display: grid; place-items: center; cursor: pointer; }
+.rb-more svg { width: 20px; height: 20px; }
+.rb-actions { display: flex; gap: 6px; border-top: 1px solid var(--rule); padding-top: 6px; }
+.rb-actions button { appearance: none; border: 0; background: transparent; display: inline-flex; gap: 6px; align-items: center; padding: 6px 10px; border-radius: 10px; font-weight: 600; font-size: 14px; cursor: pointer; color: var(--ink); }
+.rb-actions button svg { width: 18px; height: 18px; color: var(--muted); }
+.rb-actions button:hover { background: var(--field); }
+@media (prefers-reduced-motion: no-preference) {
+  .react-bar { animation: rb-in .22s cubic-bezier(.2,1.3,.4,1) both; }
+  .rb-emoji { animation: e-pop .35s cubic-bezier(.2,1.6,.4,1) both; }
+  @keyframes rb-in { from { transform: scale(.85) translateY(8px); opacity: 0; } to { transform: none; opacity: 1; } }
+}
+
+/* Pluie d'emoji (effets plein écran) */
+.fx-layer { position: fixed; inset: 0; pointer-events: none; z-index: 70; overflow: hidden; }
+.fx-layer span { position: absolute; line-height: 1; will-change: transform, opacity; }
