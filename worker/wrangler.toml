@@ -5,7 +5,7 @@ compatibility_date = "2026-10-01"
 [[d1_databases]]
 binding = "DB"
 database_name = "p2p-chat"
-database_id = "REMPLACE_PAR_TON_ID"
+database_id = "f9684e49-193c-4e76-aa4e-dc93d138c323"
 
 [durable_objects]
 bindings = [{ name = "HUB", class_name = "Hub" }]
