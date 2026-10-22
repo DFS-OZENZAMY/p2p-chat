@@ -27,6 +27,14 @@ async function refreshIceServers(force) {
 const enc = new TextEncoder();
 const dec = new TextDecoder();
 
+/** Ce qui part sur le réseau (chiffré). Une réaction n'a pas de « text » : l'app Android l'ignore. */
+const wirePayload = (m) => m.kind === "react"
+  ? { id: m.id, ts: m.ts, react: m.react || "", target: m.target }
+  : { id: m.id, ts: m.ts, text: m.text };
+const isOutboxItem = (m) => m.outgoing && !m.sent && (!m.kind || m.kind === "react");
+/** Messages fraîchement envoyés ou reçus qui doivent déclencher un effet (pluie d'emoji). */
+const freshFx = new Set();
+
 // ---------------------------------------------------------------- Stockage (IndexedDB)
 
 let db;
@@ -275,9 +283,9 @@ async function flush(peerId) {
     const c = await contactFor(peerId);
     if (!c) return;
     const k = await keyFor(c);
-    const pending = (await msgsFor(peerId)).filter((m) => m.outgoing && !m.sent && !m.kind);
+    const pending = (await msgsFor(peerId)).filter(isOutboxItem);
     for (const m of pending) {
-      const plain = enc.encode(JSON.stringify({ id: m.id, ts: m.ts, text: m.text }));
+      const plain = enc.encode(JSON.stringify(wirePayload(m)));
       const ct = await E2E.encrypt(k, plain);
       if (!s.send(ct)) break;
       m.sent = true;
@@ -294,7 +302,18 @@ async function receive(peerId, bytes, batch) {
     const c = await contactFor(peerId);
     if (!c) return;
     const j = JSON.parse(dec.decode(await E2E.decrypt(await keyFor(c), bytes)));
+    if (typeof j.react === "string" && j.target) {
+      const t = await msgGet(String(j.target));
+      if (!t || t.peerId !== peerId) return;
+      t.reactions = { ...(t.reactions || {}), them: j.react || undefined };
+      await msgPut(t);
+      if (!batch && j.react && state.peer && state.peer.id === peerId) { const fx = EMO.effectFor(j.react); if (fx) EMO.burst(fx); }
+      if (state.peer && state.peer.id === peerId) renderThread();
+      return;
+    }
+    if (typeof j.text !== "string") return;
     if (await msgGet(String(j.id))) return;
+    if (Date.now() - (Number(j.ts) || 0) < 10 * 60000) freshFx.add(String(j.id));
     const seen = state.screen === "chat" && state.peer && state.peer.id === peerId && document.visibilityState === "visible";
     await msgPut({ id: String(j.id), peerId, text: String(j.text), ts: Number(j.ts) || Date.now(), outgoing: false, sent: true, unread: !seen });
     if (batch) return;
@@ -343,10 +362,29 @@ async function addContact(name) {
 async function sendText(peerId, text) {
   const m = { id: crypto.randomUUID(), peerId, text: text.slice(0, 4000), ts: Date.now(), outgoing: true, sent: false };
   await msgPut(m);
+  freshFx.add(m.id);
   renderThread();
   openSession(peerId);
   flush(peerId);
   // Pas de connexion directe dans 3 s (contact hors ligne, app fermée…) : boîte aux lettres chiffrée.
+  setTimeout(() => relayPending(peerId), 3000);
+}
+
+/** Réagit à un message (emoji vide = retirer). Part chiffré, par la connexion directe ou la boîte aux lettres. */
+async function sendReaction(peerId, targetId, emoji) {
+  const target = await msgGet(targetId);
+  if (!target || target.peerId !== peerId) return;
+  const mine = (target.reactions && target.reactions.me) || "";
+  const next = mine === emoji ? "" : emoji;
+  target.reactions = { ...(target.reactions || {}), me: next || undefined };
+  await msgPut(target);
+  // Une seule opération en attente par message : la plus récente remplace les autres
+  for (const m of await msgsFor(peerId)) if (m.kind === "react" && m.target === targetId && !m.sent) await req("msgs", "readwrite", (st) => st.delete(m.id));
+  await msgPut({ id: crypto.randomUUID(), peerId, kind: "react", react: next, target: targetId, ts: Date.now(), outgoing: true, sent: false });
+  if (next) { const fx = EMO.effectFor(next); if (fx) EMO.burst(fx); }
+  renderThread();
+  openSession(peerId);
+  flush(peerId);
   setTimeout(() => relayPending(peerId), 3000);
 }
 
@@ -364,9 +402,9 @@ async function relayPending(peerId, force) {
     if (!c) return;
     const k = await keyFor(c);
     const now = Date.now();
-    const pending = (await msgsFor(peerId)).filter((m) => m.outgoing && !m.sent && !m.kind && (force || now - m.ts >= 2500));
+    const pending = (await msgsFor(peerId)).filter((m) => isOutboxItem(m) && (force || now - m.ts >= 2500));
     for (const m of pending) {
-      const ct = E2E.b64(await E2E.encrypt(k, enc.encode(JSON.stringify({ id: m.id, ts: m.ts, text: m.text }))));
+      const ct = E2E.b64(await E2E.encrypt(k, enc.encode(JSON.stringify(wirePayload(m)))));
       const r = await api("/mailbox/send", {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -504,6 +542,9 @@ const I = {
   key: '<circle cx="8" cy="15" r="4"/><path d="M11 12l9-9M17 6l3 3M14 9l2 2"/>',
   trash: '<path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/>',
   download: '<path d="M12 4v11M7 10l5 5 5-5M5 20h14"/>',
+  smile: '<circle cx="12" cy="12" r="9"/><path d="M8.5 14.5a4.5 4.5 0 0 0 7 0M9 9.5h.01M15 9.5h.01"/>',
+  keyboard: '<rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10"/>',
+  copy: '<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h8"/>',
 };
 const MARK = '<svg class="mark" viewBox="0 0 64 64" aria-hidden="true"><rect x="4" y="10" width="20" height="40" rx="5" fill="none" stroke="currentColor" stroke-width="3"/><rect x="40" y="14" width="20" height="40" rx="5" fill="none" stroke="currentColor" stroke-width="3"/><path d="M24 31h16" stroke="var(--accent)" stroke-width="4" stroke-linecap="round"/></svg>';
 
@@ -670,7 +711,7 @@ async function fillChatList() {
   const q = state.search.trim().toLowerCase();
   const contacts = await contactsAll();
   const items = await Promise.all(contacts.map(async (c) => {
-    const ms = await msgsFor(c.id);
+    const ms = (await msgsFor(c.id)).filter((m) => m.kind !== "react");
     const last = ms[ms.length - 1];
     return { c, last, unread: ms.filter((m) => m.unread).length, ts: last ? last.ts : 0 };
   }));
@@ -819,23 +860,43 @@ function renderChat() {
   threadEl = h("div", { class: "thread", role: "log", "aria-live": "polite" });
   const input = h("input", { type: "text", placeholder: "Message", autocomplete: "off", enterkeyhint: "send", "aria-label": "Message" });
   const sendBtn = h("button", { class: "send", type: "submit", "aria-label": "Envoyer", disabled: true }, svg(I.send));
-  input.addEventListener("input", () => { sendBtn.disabled = !input.value.trim(); });
+  const sync = () => { sendBtn.disabled = !input.value.trim(); };
+  input.addEventListener("input", sync);
+  // Clavier d'emoji (remplace le clavier du téléphone, comme WhatsApp)
+  let panel = null;
+  const emojiBtn = h("button", { class: "icon-btn emoji-toggle", type: "button", "aria-label": "Emoji", "aria-expanded": "false" }, svg(I.smile));
+  const closePanel = () => { if (!panel) return; panel.el.remove(); panel = null; emojiBtn.replaceChildren(svg(I.smile)); emojiBtn.setAttribute("aria-label", "Emoji"); emojiBtn.setAttribute("aria-expanded", "false"); };
+  emojiBtn.addEventListener("click", () => {
+    if (panel) { closePanel(); input.focus(); return; }
+    input.blur();
+    panel = EMO.picker((e) => {
+      const a = input.selectionStart ?? input.value.length, b = input.selectionEnd ?? input.value.length;
+      input.setRangeText(e, a, b, "end");
+      sync();
+    });
+    chatEl.append(panel.el);
+    emojiBtn.replaceChildren(svg(I.keyboard)); emojiBtn.setAttribute("aria-label", "Clavier"); emojiBtn.setAttribute("aria-expanded", "true");
+    requestAnimationFrame(() => { threadEl.scrollTop = threadEl.scrollHeight; });
+  });
+  input.addEventListener("focus", closePanel);
   const form = h("form", { class: "composer", onsubmit: (e) => {
     e.preventDefault();
     const t = input.value.trim();
     if (!t) return;
-    input.value = ""; sendBtn.disabled = true;
+    input.value = ""; sync();
     sendText(c.id, t);
-    input.focus();
-  } }, input, sendBtn);
-  root.replaceChildren(h("div", { class: "screen chat" },
+    if (!panel) input.focus();
+  } }, emojiBtn, input, sendBtn);
+  const chatEl = h("div", { class: "screen chat" });
+  root.replaceChildren(chatEl);
+  chatEl.append(
     h("header", { class: "chat-head" },
       h("button", { class: "icon-btn accent", "aria-label": "Retour aux discussions", onclick: () => history.back() }, svg(I.back)),
       avatar(c.username, "s"),
       h("div", { class: "who" }, h("h1", { class: "title" }, c.username), statusEl),
       h("button", { class: "icon-btn accent", "aria-label": "Appel audio", title: "Appel audio", onclick: () => window.startCall && window.startCall(c, false) }, svg(I.phone)),
       h("button", { class: "icon-btn accent", "aria-label": "Appel vidéo", title: "Appel vidéo", onclick: () => window.startCall && window.startCall(c, true) }, svg(I.video))),
-    threadEl, form));
+    threadEl, form);
   renderStatus();
   renderThread();
 }
@@ -869,6 +930,7 @@ async function renderThread() {
       nodes.push(h("div", { class: "line center" }, h("p", { class: "call-log" }, svg(video ? I.video : I.phone), m.text + " · " + timeFmt.format(m.ts))));
       prev = null; continue;
     }
+    if (m.kind === "react") continue;
     const cont = prev && prev.outgoing === m.outgoing && m.ts - prev.ts < 180000;
     let state_ = null;
     if (m.outgoing) {
@@ -876,17 +938,105 @@ async function renderThread() {
       else if (m.relayed) state_ = h("span", { class: "tick", "aria-label": "déposé, sera remis à son retour" }, svg(I.check));
       else state_ = h("span", { class: "tick ok", "aria-label": "remis" }, svg(I.checks));
     }
-    nodes.push(h("div", { class: "line " + (m.outgoing ? "end" : "start") + (cont ? " cont" : "") },
-      h("div", { class: "bubble " + (m.outgoing ? "out" : "in") },
-        h("span", { class: "text" }, m.text),
-        h("span", { class: "meta" }, h("time", {}, timeFmt.format(m.ts)), state_ || ""))));
+    const jumbo = EMO.jumboCount(m.text);
+    let body;
+    if (jumbo) {
+      body = h("span", { class: "text jumbo j" + jumbo },
+        ...EMO.graphemes(m.text.trim()).filter((g) => g.trim()).map((g, i) => h("span", { class: "je a-" + EMO.animFor(g), style: "animation-delay:" + (i * 0.12) + "s" }, g)));
+    } else {
+      body = h("span", { class: "text" }, m.text);
+    }
+    const r = m.reactions || {};
+    const reacts = [r.me, r.them].filter(Boolean);
+    const reactEl = reacts.length ? h("button", { class: "reacts", type: "button", "aria-label": "Réactions : " + reacts.join(" "), onclick: (e) => { e.stopPropagation(); openReactBar(m, e.currentTarget.closest(".bubble")); } },
+      ...(r.me && r.me === r.them ? [h("span", {}, r.me), h("small", {}, "2")] : reacts.map((x) => h("span", {}, x)))) : "";
+    const bubble = h("div", { class: "bubble " + (m.outgoing ? "out" : "in") + (jumbo ? " bare" : "") + (reacts.length ? " has-reacts" : ""), "data-id": m.id, tabindex: "0" },
+      body, h("span", { class: "meta" }, h("time", {}, timeFmt.format(m.ts)), state_ || ""), reactEl);
+    attachGestures(bubble, m);
+    nodes.push(h("div", { class: "line " + (m.outgoing ? "end" : "start") + (cont ? " cont" : "") + (reacts.length ? " reacted" : "") }, bubble));
     prev = m;
   }
   if (!ms.length) nodes.push(h("div", { class: "line center" }, h("p", { class: "day" }, "Envoie ton premier message. Il part directement vers le téléphone de " + state.peer.username + ".")));
   const atBottom = threadEl.scrollHeight - threadEl.scrollTop - threadEl.clientHeight < 80;
   threadEl.replaceChildren(...nodes);
+  // Effets plein écran pour les messages qui viennent d'arriver ou de partir
+  for (const m of ms) if (freshFx.has(m.id)) {
+    freshFx.delete(m.id);
+    if (document.visibilityState === "visible") { const fx = EMO.effectFor(m.text); if (fx) { EMO.burst(fx); break; } }
+  }
   if (atBottom || my <= 2) threadEl.scrollTop = threadEl.scrollHeight;
   else threadEl.scrollTop = threadEl.scrollHeight;
+}
+
+// ---------- Réactions : appui long ou double-tap sur une bulle
+
+function attachGestures(bubble, m) {
+  let timer = null, startX = 0, startY = 0, lastTap = 0;
+  bubble.addEventListener("pointerdown", (e) => {
+    if (e.target.closest(".reacts")) return;
+    startX = e.clientX; startY = e.clientY;
+    clearTimeout(timer);
+    timer = setTimeout(() => { timer = null; if (navigator.vibrate) try { navigator.vibrate(12); } catch {} openReactBar(m, bubble); }, 430);
+  });
+  bubble.addEventListener("pointermove", (e) => { if (timer && Math.hypot(e.clientX - startX, e.clientY - startY) > 10) { clearTimeout(timer); timer = null; } });
+  const cancel = () => { clearTimeout(timer); timer = null; };
+  bubble.addEventListener("pointercancel", cancel);
+  bubble.addEventListener("pointerup", (e) => {
+    if (!timer) return; // l'appui long a déjà ouvert la barre
+    cancel();
+    if (e.target.closest(".reacts")) return;
+    const now = Date.now();
+    if (now - lastTap < 320) { lastTap = 0; sendReaction(m.peerId, m.id, "❤️"); popHeart(bubble); }
+    else lastTap = now;
+  });
+  bubble.addEventListener("contextmenu", (e) => { e.preventDefault(); openReactBar(m, bubble); });
+  bubble.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openReactBar(m, bubble); } });
+}
+
+function popHeart(bubble) {
+  if (matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+  const hrt = h("span", { class: "pop-heart", "aria-hidden": "true" }, "❤️");
+  bubble.append(hrt);
+  setTimeout(() => hrt.remove(), 900);
+}
+
+let reactBar = null;
+function closeReactBar() { if (reactBar) { reactBar.remove(); reactBar = null; } }
+function openReactBar(m, bubble) {
+  closeReactBar();
+  const mine = (m.reactions && m.reactions.me) || "";
+  const pick = (e) => { closeReactBar(); sendReaction(m.peerId, m.id, e); };
+  const more = h("button", { class: "rb-more", type: "button", "aria-label": "Plus d'emoji" }, svg(I.plus));
+  const bar = h("div", { class: "react-bar", role: "dialog", "aria-label": "Réagir au message" },
+    h("div", { class: "rb-row" },
+      ...EMO.QUICK.map((e, i) => h("button", { class: "rb-emoji" + (mine === e ? " on" : ""), type: "button", style: "animation-delay:" + (i * 0.03) + "s", "aria-label": "Réagir " + e, onclick: () => pick(e) }, e)),
+      more),
+    h("div", { class: "rb-actions" },
+      h("button", { type: "button", onclick: async () => { closeReactBar(); try { await navigator.clipboard.writeText(m.text); } catch {} } }, svg(I.copy), "Copier"),
+      mine ? h("button", { type: "button", onclick: () => pick(mine) }, "Retirer " + mine) : ""));
+  more.addEventListener("click", () => {
+    const p = EMO.picker((e) => pick(e), { compact: true });
+    bar.classList.add("expanded");
+    bar.querySelector(".rb-row").replaceWith(p.el);
+  });
+  const veil = h("div", { class: "react-veil", onclick: closeReactBar });
+  reactBar = h("div", { class: "react-layer" }, veil, bar);
+  document.body.append(reactBar);
+  // Placer la barre au-dessus (ou au-dessous) de la bulle
+  const rect = bubble.getBoundingClientRect();
+  const bw = Math.min(340, innerWidth - 16);
+  bar.style.width = bw + "px";
+  let left = m.outgoing ? rect.right - bw : rect.left;
+  left = Math.max(8, Math.min(left, innerWidth - bw - 8));
+  bar.style.left = left + "px";
+  const above = rect.top > 150;
+  bar.style.top = (above ? Math.max(8, rect.top - 118) : Math.min(innerHeight - 130, rect.bottom + 8)) + "px";
+  bubble.classList.add("lifted");
+  const obs = new MutationObserver(() => { if (!document.body.contains(reactBar)) { bubble.classList.remove("lifted"); obs.disconnect(); } });
+  obs.observe(document.body, { childList: true });
+  const onKey = (e) => { if (e.key === "Escape") { closeReactBar(); removeEventListener("keydown", onKey); } };
+  addEventListener("keydown", onKey);
+  bar.querySelector("button").focus({ preventScroll: true });
 }
 
 // ---------------------------------------------------------------- Démarrage
