@@ -3,7 +3,7 @@
 // puis les messages passent directement d'appareil à appareil (WebRTC DataChannel), chiffrés.
 "use strict";
 
-const CFG = window.P2P_CONFIG || {};
+const CFG = self.P2P_CONFIG || {};
 const DEFAULT_ICE = CFG.iceServers || [{ urls: ["stun:stun.cloudflare.com:3478", "stun:stun.l.google.com:19302"] }];
 let iceServers = DEFAULT_ICE;
 let iceFetchedAt = 0;
@@ -121,8 +121,10 @@ function connectSocket() {
   socket = ws;
   ws.onopen = async () => {
     reconnectDelay = 1000; state.online = true; render();
+    fetchMailbox();
     await refreshIceServers();
     if (state.peer) openSession(state.peer.id);
+    relayAllPending();
   };
   ws.onmessage = (e) => { try { handleSignal(JSON.parse(e.data)); } catch {} };
   ws.onclose = () => {
@@ -146,7 +148,13 @@ function setPeerStatus(id, s) {
 function handleSignal(m) {
   const from = m.from;
   if (!from || !state.me) return;
-  if (m.type === "offline") { setPeerStatus(from, "offline"); if (window.onCallSignal) window.onCallSignal(m); return; }
+  if (m.type === "mailbox") { fetchMailbox(); return; }
+  if (m.type === "offline") {
+    setPeerStatus(from, "offline");
+    relayPending(from, true);
+    if (window.onCallSignal) window.onCallSignal(m);
+    return;
+  }
   if (typeof m.type === "string" && m.type.startsWith("call-")) { if (window.onCallSignal) window.onCallSignal(m); return; }
   if (m.type === "offer") {
     const old = sessions.get(from);
@@ -276,13 +284,14 @@ async function flush(peerId) {
   }
 }
 
-async function receive(peerId, bytes) {
+async function receive(peerId, bytes, batch) {
   try {
     const c = await contactFor(peerId);
     if (!c) return;
     const j = JSON.parse(dec.decode(await E2E.decrypt(await keyFor(c), bytes)));
-    if (await msgGet(j.id)) return;
+    if (await msgGet(String(j.id))) return;
     await msgPut({ id: String(j.id), peerId, text: String(j.text), ts: Number(j.ts) || Date.now(), outgoing: false, sent: true });
+    if (batch) return;
     if (state.peer && state.peer.id === peerId) renderThread();
     else if (state.screen === "home") renderHome();
   } catch (e) { console.warn("message illisible", e); }
@@ -310,6 +319,7 @@ async function register(username) {
   await kvSet("identity", me);
   state.me = me;
   connectSocket();
+  enablePush(true).catch(() => {});
 }
 
 async function addContact(name) {
@@ -330,6 +340,131 @@ async function sendText(peerId, text) {
   renderThread();
   openSession(peerId);
   flush(peerId);
+  // Pas de connexion directe dans 3 s (contact hors ligne, app fermée…) : boîte aux lettres chiffrée.
+  setTimeout(() => relayPending(peerId), 3000);
+}
+
+// ---------------------------------------------------------------- Boîte aux lettres (contact hors ligne)
+
+const relaying = new Set();
+/** Envoie via l'annuaire les messages pas encore partis en direct. Le serveur ne voit que du chiffré. */
+async function relayPending(peerId, force) {
+  if (relaying.has(peerId) || !state.me) return;
+  relaying.add(peerId);
+  try {
+    const s = sessions.get(peerId);
+    if (s && s.isOpen) return; // la connexion directe s'en charge
+    const c = await contactFor(peerId);
+    if (!c) return;
+    const k = await keyFor(c);
+    const now = Date.now();
+    const pending = (await msgsFor(peerId)).filter((m) => m.outgoing && !m.sent && !m.kind && (force || now - m.ts >= 2500));
+    for (const m of pending) {
+      const ct = E2E.b64(await E2E.encrypt(k, enc.encode(JSON.stringify({ id: m.id, ts: m.ts, text: m.text }))));
+      const r = await api("/mailbox/send", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ id: state.me.id, token: state.me.token, to: peerId, msgId: m.id, ct }),
+      }).catch(() => null);
+      if (!r || !r.ok) break;
+      m.sent = true;
+      m.relayed = true;
+      await msgPut(m);
+    }
+  } finally {
+    relaying.delete(peerId);
+    if (state.peer && state.peer.id === peerId) renderThread();
+  }
+}
+
+async function relayAllPending() {
+  for (const c of await contactsAll()) relayPending(c.id);
+}
+
+let fetchingMailbox = false;
+/** Récupère les messages reçus pendant que l'app était fermée. */
+async function fetchMailbox() {
+  if (fetchingMailbox || !state.me || !directoryUrl()) return;
+  fetchingMailbox = true;
+  try {
+    const r = await api("/mailbox?id=" + encodeURIComponent(state.me.id) + "&token=" + encodeURIComponent(state.me.token)).catch(() => null);
+    if (!r || !r.ok || !r.json || !Array.isArray(r.json.messages)) return;
+    const done = [];
+    const touched = new Set();
+    for (const m of r.json.messages) {
+      try {
+        await receive(m.fromId, E2E.unb64(m.ct), true);
+        touched.add(m.fromId);
+      } catch {}
+      done.push(m.msgId);
+    }
+    if (done.length) {
+      await api("/mailbox/ack", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ id: state.me.id, token: state.me.token, ids: done }),
+      }).catch(() => {});
+    }
+    if (touched.size) {
+      if (state.peer && touched.has(state.peer.id)) renderThread();
+      else if (state.screen === "home") renderHome();
+    }
+  } finally {
+    fetchingMailbox = false;
+  }
+}
+
+// ---------------------------------------------------------------- Notifications push
+
+const pushSupported = () => "serviceWorker" in navigator && "PushManager" in window && "Notification" in window;
+
+function b64uToBytes(s) {
+  const b = s.replace(/-/g, "+").replace(/_/g, "/");
+  return Uint8Array.from(atob(b + "===".slice((b.length + 3) % 4)), (c) => c.charCodeAt(0));
+}
+
+/** Abonne cet appareil (après accord de l'utilisateur). silent = ne rien demander, seulement rafraîchir. */
+async function enablePush(silent) {
+  if (!pushSupported() || !state.me) return "unsupported";
+  if (silent && Notification.permission !== "granted") return Notification.permission;
+  if (!silent) {
+    const p = await Notification.requestPermission();
+    if (p !== "granted") return p;
+  }
+  const keyRes = await api("/push/key").catch(() => null);
+  if (!keyRes || !keyRes.ok) return "server";
+  const reg = await navigator.serviceWorker.ready;
+  let sub = await reg.pushManager.getSubscription();
+  const key = b64uToBytes(keyRes.json.key);
+  if (sub && sub.options && sub.options.applicationServerKey) {
+    const old = new Uint8Array(sub.options.applicationServerKey);
+    if (old.length !== key.length || old.some((v, i) => v !== key[i])) { await sub.unsubscribe(); sub = null; }
+  }
+  if (!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: key });
+  const j = sub.toJSON();
+  const r = await api("/push/subscribe", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ id: state.me.id, token: state.me.token, endpoint: j.endpoint, p256dh: j.keys.p256dh, auth: j.keys.auth }),
+  });
+  return r.ok ? "granted" : "server";
+}
+
+function pushBanner() {
+  if (!state.me) return null;
+  if (isIOS && !isStandalone()) return null; // l'invitation à installer passe d'abord
+  if (!pushSupported()) return null;
+  if (Notification.permission === "granted") return null;
+  if (Notification.permission === "denied") {
+    return h("div", { class: "install-hint" }, h("span", {}, "Notifications bloquées : autorise-les dans les réglages du téléphone pour recevoir messages et appels quand l'app est fermée."));
+  }
+  const btn = h("button", { class: "btn", onclick: async () => {
+    btn.disabled = true;
+    const r = await enablePush(false).catch(() => "server");
+    if (r === "server") alert("Le serveur n'a pas encore les notifications activées. Voir le README (npm run vapid).");
+    render();
+  } }, "Activer");
+  return h("div", { class: "install-hint" }, h("span", {}, "Active les notifications pour recevoir messages et appels même quand l'app est fermée."), btn);
 }
 
 // ---------------------------------------------------------------- Interface
@@ -439,6 +574,7 @@ async function renderHome() {
       h("span", { class: "status" }, h("span", { class: "dot" + (state.online ? " on" : "") }), state.online ? state.me.username : "hors ligne"),
       h("button", { class: "icon-btn", "aria-label": "Réglages", onclick: openSettings }, svg(ICON_GEAR))),
     installHint() || "",
+    pushBanner() || "",
     form, err,
     items.length ? h("ul", { class: "list" }, items)
       : h("p", { class: "empty" }, "Ajoute un contact avec son nom d'utilisateur pour commencer. Il doit avoir créé son compte dans P2P Chat, sur Android ou sur le web."),
@@ -518,6 +654,7 @@ async function openSettings() {
     e.preventDefault();
     const v = server.value.trim();
     try { if (v && v !== CFG.directoryUrl) localStorage.setItem("directoryUrl", v); else localStorage.removeItem("directoryUrl"); } catch {}
+    kvSet("directoryUrl", directoryUrl()).catch(() => {});
     if (socket) { const s = socket; socket = null; s.close(); }
     connectSocket(); close(); render();
   } },
@@ -541,9 +678,40 @@ async function openSettings() {
 // ---------------------------------------------------------------- Démarrage
 
 window.addEventListener("beforeinstallprompt", (e) => { e.preventDefault(); state.installPrompt = e; if (state.screen === "home") render(); });
+// En arrière-plan, on se déconnecte de l'annuaire : il sait alors qu'il doit envoyer une notification push
+// (sinon un téléphone en veille garderait une connexion « fantôme » et ne serait jamais prévenu).
 document.addEventListener("visibilitychange", () => {
-  if (document.visibilityState === "visible" && state.me && !socket) connectSocket();
+  if (!state.me) return;
+  if (document.visibilityState === "hidden") {
+    const inCall = typeof window.isInCall === "function" && window.isInCall();
+    if (!inCall && socket) { const s = socket; socket = null; state.online = false; s.close(1000, "background"); }
+  } else {
+    if (!socket) connectSocket();
+    else fetchMailbox();
+  }
 });
+
+/** Ouvre ce que demande une notification (?chat=… ou ?call=…). */
+async function handleLink(href) {
+  let u;
+  try { u = new URL(href, location.href); } catch { return; }
+  const chat = u.searchParams.get("chat");
+  const callId = u.searchParams.get("call");
+  if (callId) {
+    window.pendingAnswer = { callId, auto: u.searchParams.get("answer") === "1" };
+    if (u.searchParams.get("from")) { const c = await contactFor(u.searchParams.get("from")); if (c && state.screen !== "chat") openChat(c); }
+  } else if (chat) {
+    const c = await contactFor(chat);
+    if (c) openChat(c);
+  }
+}
+
+if ("serviceWorker" in navigator) {
+  navigator.serviceWorker.addEventListener("message", (e) => {
+    if (e.data && e.data.type === "open" && state.me) handleLink(e.data.url);
+    if (e.data && e.data.type === "mailbox" && state.me) fetchMailbox();
+  });
+}
 
 (async function start() {
   if (!window.crypto || !crypto.subtle || !window.RTCPeerConnection || !window.indexedDB) {
@@ -553,7 +721,15 @@ document.addEventListener("visibilitychange", () => {
   db = await openDb();
   try { navigator.storage && navigator.storage.persist && navigator.storage.persist(); } catch {}
   const me = await kvGet("identity");
+  // Le service worker (notifications) lit l'adresse de l'annuaire ici
+  try { await kvSet("directoryUrl", directoryUrl()); } catch {}
   if (me) { state.me = me; state.screen = "home"; connectSocket(); }
   render();
-  if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
+  if ("serviceWorker" in navigator) {
+    navigator.serviceWorker.register("sw.js").then(() => enablePush(true)).catch(() => {});
+  }
+  if (me && /[?&](chat|call)=/.test(location.search)) {
+    await handleLink(location.href);
+    history.replaceState(history.state, "", location.pathname);
+  }
 })();
