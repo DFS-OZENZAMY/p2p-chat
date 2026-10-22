@@ -212,15 +212,16 @@ class Call {
 
 /** Trace l'appel dans la conversation (local uniquement, jamais envoyé). */
 async function logCall(c, wasActive) {
-  const kind = c.video ? "Appel vidéo" : "Appel audio";
-  let text;
-  if (wasActive) text = kind + " · " + fmtDuration(Date.now() - c.startedAt);
-  else if (c.declined) text = kind + " refusé";
-  else if (c.outgoing) text = kind + " sans réponse";
-  else text = kind + " manqué";
-  await msgPut({ id: "call-" + c.id, peerId: c.peerId, text, ts: Date.now(), outgoing: c.outgoing, sent: true, kind: "call" });
+  const video = c.wasVideo != null ? c.wasVideo : c.video;
+  const kind = video ? "Appel vidéo" : "Appel audio";
+  let text, status, duration = null;
+  if (wasActive) { duration = fmtDuration(Date.now() - c.startedAt); text = kind + " · " + duration; status = "ok"; }
+  else if (c.declined) { text = kind + " refusé"; status = "declined"; }
+  else if (c.outgoing) { text = kind + " sans réponse"; status = "noanswer"; }
+  else { text = kind + " manqué"; status = "missed"; }
+  await msgPut({ id: "call-" + c.id, peerId: c.peerId, text, ts: Date.now(), outgoing: c.outgoing, sent: true, kind: "call", video, status, duration });
   if (state.peer && state.peer.id === c.peerId) renderThread();
-  else if (state.screen === "home") renderHome();
+  else if (state.screen === "home") renderTab(true);
 }
 
 async function startCall(contact, video) {
@@ -246,9 +247,10 @@ async function startCall(contact, video) {
   }
 }
 
-async function acceptCall() {
+async function acceptCall(audioOnly) {
   const c = call;
   if (!c || c.state !== "ringing") return;
+  if (audioOnly === true && c.video) { c.wasVideo = true; c.video = false; }
   c.state = "connecting";
   renderCall();
   try {
@@ -332,7 +334,7 @@ async function onCallSignal(m) {
   }
 }
 
-// ---------------------------------------------------------------- Interface d'appel
+// ---------------------------------------------------------------- Interface d'appel (maquette Figma)
 
 let callEl = null, tickTimer = null, noteTimer = null;
 
@@ -340,6 +342,18 @@ function attach(el, stream) {
   if (el.srcObject !== stream) el.srcObject = stream;
   const p = el.play();
   if (p && p.catch) p.catch(() => {});
+}
+
+function messageInstead() {
+  const c = call;
+  if (!c) return;
+  const contact = c.contact;
+  c.end(null, true, "declined");
+  if (!(state.screen === "chat" && state.peer && state.peer.id === contact.id)) openChat(contact);
+}
+
+function chipEl() {
+  return h("span", { class: "chip on glass" }, svg('<path d="M9 15l6-6M10 6l1-1a4 4 0 0 1 6 6l-1 1M14 18l-1 1a4 4 0 0 1-6-6l1-1"/>'), "liaison directe · chiffré");
 }
 
 function renderCall(note) {
@@ -362,57 +376,83 @@ function renderCall(note) {
     callEl = h("div", { role: "dialog", "aria-modal": "true", "aria-label": "Appel" });
     document.body.append(callEl);
   }
-  const showVideo = c.video && (c.state === "active" || c.state === "connecting" || c.outgoing);
-  callEl.className = "call" + (showVideo ? " video" : "");
+  const live = c.state === "active" || c.state === "connecting";
+  const remoteHasVideo = c.remote.getVideoTracks().length > 0;
+  const videoLayout = c.video && (live || c.outgoing);
+  callEl.className = "call" + (videoLayout ? " video" : "") + (c.state === "ringing" ? " ringing" : "");
 
   const status = h("p", { class: "call-status" });
   const setStatus = () => {
     status.textContent = {
       calling: !c.pc ? "Préparation…" : c.pushed ? "Ça sonne sur son téléphone…" : "Ça sonne…",
-      ringing: c.video ? "Appel vidéo entrant" : "Appel audio entrant",
+      ringing: "t'appelle…",
       connecting: "Connexion…",
-      active: fmtDuration(Date.now() - c.startedAt),
+      active: fmtDuration(Date.now() - c.startedAt) + (c.video ? " · HD" : ""),
     }[c.state] || "";
   };
   setStatus();
   if (c.state === "active") tickTimer = setInterval(setStatus, 1000);
 
-  const kids = [];
-  if (showVideo) {
-    const rv = h("video", { class: "remote-video", playsinline: true, autoplay: true });
-    const lv = h("video", { class: "local-video" + (c.facing === "user" ? " mirror" : "") + (c.camOff ? " off" : ""), playsinline: true, autoplay: true, muted: true });
-    lv.muted = true;
-    kids.push(rv, lv);
-    queueMicrotask(() => { attach(rv, c.remote); if (c.local) attach(lv, c.local); });
-  } else {
-    const ra = h("audio", { autoplay: true });
-    kids.push(ra);
-    queueMicrotask(() => attach(ra, c.remote));
-  }
-
-  kids.push(h("div", { class: "call-center" },
-    h("span", { class: "call-avatar", "aria-hidden": "true" }, c.contact.username[0].toUpperCase()),
-    h("p", { class: "call-name" }, c.contact.username),
-    status));
-
   const btn = (label, icon, onclick, cls = "") => h("button", { class: "call-btn " + cls, "aria-label": label, title: label, onclick }, svg(icon));
-  const bar = h("div", { class: "call-bar" });
-  if (c.state === "ringing") {
-    bar.append(
-      btn("Refuser", ICON_HANGUP, declineCall, "hang"),
-      btn(c.video ? "Accepter l'appel vidéo" : "Accepter l'appel", c.video ? ICON_VIDEO : ICON_PHONE, acceptCall, "accept"),
-    );
-  } else {
-    bar.append(btn(c.muted ? "Réactiver le micro" : "Couper le micro", c.muted ? ICON_MIC_OFF : ICON_MIC, () => c.local && c.toggleMute(), c.muted ? "on" : ""));
-    if (c.video) {
+  const labelled = (b, label) => h("div", { class: "call-opt" }, b, h("span", {}, label));
+  const kids = [];
+
+  if (videoLayout) {
+    // ---- Vidéo : image du contact en plein écran, ma caméra en vignette, commandes en verre
+    const rv = h("video", { class: "remote-video", playsinline: true, autoplay: true });
+    kids.push(rv);
+    queueMicrotask(() => attach(rv, c.remote));
+    if (!remoteHasVideo || c.state !== "active") {
+      kids.push(h("div", { class: "call-center floating" }, avatar(c.contact.username, "l"),
+        h("p", { class: "call-name" }, c.contact.username), status));
+    }
+    kids.push(h("div", { class: "video-shade" }));
+    if (remoteHasVideo && c.state === "active") {
+      kids.push(h("div", { class: "video-info" }, h("p", { class: "call-name small" }, c.contact.username), status, chipEl()));
+    }
+    if (c.local) {
+      const lv = h("video", { class: "local-video" + (c.facing === "user" ? " mirror" : "") + (c.camOff ? " off" : ""), playsinline: true, autoplay: true, muted: true });
+      lv.muted = true;
+      kids.push(lv);
+      queueMicrotask(() => attach(lv, c.local));
+    }
+    const bar = h("div", { class: "call-bar glass-bar" });
+    if (c.state !== "calling") {
       bar.append(
+        btn(c.muted ? "Réactiver le micro" : "Couper le micro", c.muted ? ICON_MIC_OFF : ICON_MIC, () => c.local && c.toggleMute(), c.muted ? "on" : ""),
         btn(c.camOff ? "Réactiver la caméra" : "Couper la caméra", c.camOff ? ICON_CAM_OFF : ICON_VIDEO, () => c.local && c.toggleCam(), c.camOff ? "on" : ""),
-        btn("Changer de caméra", ICON_FLIP, () => c.flip()),
-      );
+        btn("Changer de caméra", ICON_FLIP, () => c.flip()));
     }
     bar.append(btn("Raccrocher", ICON_HANGUP, hangUp, "hang"));
+    kids.push(bar);
+  } else {
+    // ---- Audio, appel entrant ou sortant : halo, grand avatar, nom
+    const ra = h("audio", { autoplay: true });
+    kids.push(ra, h("div", { class: "halo" }));
+    queueMicrotask(() => attach(ra, c.remote));
+    const top = h("div", { class: "call-center" });
+    if (c.state === "ringing") top.append(h("p", { class: "call-kind" }, svg('<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/>'), (c.video ? "Appel vidéo" : "Appel audio") + " chiffré · P2P Chat"));
+    top.append(avatar(c.contact.username, "l"), h("p", { class: "call-name" }, c.contact.username), status);
+    if (c.state === "active") top.append(chipEl());
+    kids.push(top);
+
+    const foot = h("div", { class: "call-foot" });
+    if (c.state === "ringing") {
+      const opts = h("div", { class: "call-opts" });
+      if (c.video) opts.append(labelled(btn("Répondre en audio", ICON_PHONE, () => acceptCall(true), "small"), "Répondre en audio"));
+      opts.append(labelled(btn("Répondre par message", '<path d="M4 5h16v11H9l-5 4z"/>', messageInstead, "small"), "Message"));
+      foot.append(opts, h("div", { class: "call-answer" },
+        labelled(btn("Refuser", ICON_HANGUP, declineCall, "hang big"), "Refuser"),
+        labelled(btn(c.video ? "Accepter l'appel vidéo" : "Accepter l'appel", c.video ? ICON_VIDEO : ICON_PHONE, () => acceptCall(), "accept big"), "Accepter")));
+    } else {
+      if (c.state !== "calling") {
+        foot.append(h("div", { class: "call-opts" },
+          labelled(btn(c.muted ? "Réactiver le micro" : "Couper le micro", c.muted ? ICON_MIC_OFF : ICON_MIC, () => c.local && c.toggleMute(), c.muted ? "on" : ""), c.muted ? "Micro coupé" : "Micro")));
+      }
+      foot.append(h("div", { class: "call-answer single" }, btn("Raccrocher", ICON_HANGUP, hangUp, "hang big")));
+    }
+    kids.push(foot);
   }
-  kids.push(bar);
   callEl.replaceChildren(...kids);
 }
 

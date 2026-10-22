@@ -2,7 +2,7 @@
 // Les messages restent chiffrés de bout en bout : le texte est déchiffré ici, sur le téléphone.
 importScripts("config.js", "vendor/nacl-fast.min.js", "crypto.js");
 
-const CACHE = "p2p-chat-92acfa02";
+const CACHE = "p2p-chat-5316bd92";
 const SHELL = ["./", "index.html", "app.css", "app.js", "call.js", "crypto.js", "config.js", "vendor/nacl-fast.min.js",
   "manifest.webmanifest", "icons/icon.svg", "icons/icon-192.png", "icons/badge-96.png", "icons/apple-touch-icon.png"];
 
@@ -83,7 +83,7 @@ async function decryptPreview(data) {
     const j = JSON.parse(new TextDecoder().decode(await E2E.decrypt(k, E2E.unb64(data.ct))));
     // On range le message tout de suite : il s'affichera à l'ouverture de l'app
     if (known && !(await idbGet("msgs", String(j.id)))) {
-      await idbPut("msgs", { id: String(j.id), peerId: data.from, text: String(j.text), ts: Number(j.ts) || Date.now(), outgoing: false, sent: true });
+      await idbPut("msgs", { id: String(j.id), peerId: data.from, text: String(j.text), ts: Number(j.ts) || Date.now(), outgoing: false, sent: true, unread: true });
     }
     return String(j.text);
   } catch {
