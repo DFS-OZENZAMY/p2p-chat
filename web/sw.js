@@ -83,7 +83,7 @@ async function decryptPreview(data) {
     const j = JSON.parse(new TextDecoder().decode(await E2E.decrypt(k, E2E.unb64(data.ct))));
     // On range le message tout de suite : il s'affichera à l'ouverture de l'app
     if (known && !(await idbGet("msgs", String(j.id)))) {
-      await idbPut("msgs", { id: String(j.id), peerId: data.from, text: String(j.text), ts: Number(j.ts) || Date.now(), outgoing: false, sent: true });
+      await idbPut("msgs", { id: String(j.id), peerId: data.from, text: String(j.text), ts: Number(j.ts) || Date.now(), outgoing: false, sent: true, unread: true });
     }
     return String(j.text);
   } catch {

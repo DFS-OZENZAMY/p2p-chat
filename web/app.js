@@ -95,6 +95,8 @@ async function lookup(key) {
 const state = {
   me: null,            // { id, username, token, priv: Uint8Array, pub: Uint8Array, pubB64 }
   screen: "setup",     // setup | home | chat
+  tab: "chats",        // chats | calls | settings (écran d'accueil)
+  search: "",
   peer: null,          // contact ouvert
   online: false,       // websocket annuaire
   peerStatus: {},      // peerId -> "direct" | "connecting" | "offline"
@@ -120,7 +122,8 @@ function connectSocket() {
   const ws = new WebSocket(url);
   socket = ws;
   ws.onopen = async () => {
-    reconnectDelay = 1000; state.online = true; render();
+    reconnectDelay = 1000; state.online = true;
+    if (state.screen === "chat") renderStatus(); else if (state.screen === "home") renderTab(true);
     fetchMailbox();
     await refreshIceServers();
     if (state.peer) openSession(state.peer.id);
@@ -129,7 +132,8 @@ function connectSocket() {
   ws.onmessage = (e) => { try { handleSignal(JSON.parse(e.data)); } catch {} };
   ws.onclose = () => {
     if (socket !== ws) return;
-    socket = null; state.online = false; render();
+    socket = null; state.online = false;
+    if (state.screen === "chat") renderStatus(); else if (state.screen === "home") renderTab(true);
     setTimeout(() => { if (!socket && state.me) connectSocket(); }, reconnectDelay);
     reconnectDelay = Math.min(reconnectDelay * 2, 30000);
   };
@@ -143,6 +147,7 @@ function setPeerStatus(id, s) {
   if (state.peerStatus[id] === s) return;
   state.peerStatus[id] = s;
   if (state.peer && state.peer.id === id) renderStatus();
+  else if (state.screen === "home" && state.tab === "chats") scheduleListRefresh();
 }
 
 function handleSignal(m) {
@@ -290,10 +295,11 @@ async function receive(peerId, bytes, batch) {
     if (!c) return;
     const j = JSON.parse(dec.decode(await E2E.decrypt(await keyFor(c), bytes)));
     if (await msgGet(String(j.id))) return;
-    await msgPut({ id: String(j.id), peerId, text: String(j.text), ts: Number(j.ts) || Date.now(), outgoing: false, sent: true });
+    const seen = state.screen === "chat" && state.peer && state.peer.id === peerId && document.visibilityState === "visible";
+    await msgPut({ id: String(j.id), peerId, text: String(j.text), ts: Number(j.ts) || Date.now(), outgoing: false, sent: true, unread: !seen });
     if (batch) return;
     if (state.peer && state.peer.id === peerId) renderThread();
-    else if (state.screen === "home") renderHome();
+    else if (state.screen === "home") scheduleListRefresh();
   } catch (e) { console.warn("message illisible", e); }
 }
 
@@ -406,8 +412,8 @@ async function fetchMailbox() {
       }).catch(() => {});
     }
     if (touched.size) {
-      if (state.peer && touched.has(state.peer.id)) renderThread();
-      else if (state.screen === "home") renderHome();
+      if (state.peer && touched.has(state.peer.id)) { markRead(state.peer.id); renderThread(); }
+      else if (state.screen === "home") scheduleListRefresh();
     }
   } finally {
     fetchingMailbox = false;
@@ -450,24 +456,8 @@ async function enablePush(silent) {
   return r.ok ? "granted" : "server";
 }
 
-function pushBanner() {
-  if (!state.me) return null;
-  if (isIOS && !isStandalone()) return null; // l'invitation à installer passe d'abord
-  if (!pushSupported()) return null;
-  if (Notification.permission === "granted") return null;
-  if (Notification.permission === "denied") {
-    return h("div", { class: "install-hint" }, h("span", {}, "Notifications bloquées : autorise-les dans les réglages du téléphone pour recevoir messages et appels quand l'app est fermée."));
-  }
-  const btn = h("button", { class: "btn", onclick: async () => {
-    btn.disabled = true;
-    const r = await enablePush(false).catch(() => "server");
-    if (r === "server") alert("Le serveur n'a pas encore les notifications activées. Voir le README (npm run vapid).");
-    render();
-  } }, "Activer");
-  return h("div", { class: "install-hint" }, h("span", {}, "Active les notifications pour recevoir messages et appels même quand l'app est fermée."), btn);
-}
-
 // ---------------------------------------------------------------- Interface
+// Design : maquettes Figma « P2P Chat — UX/UI » (discussions, conversation, appels, réglages).
 
 const root = document.getElementById("root");
 const h = (tag, props = {}, ...kids) => {
@@ -475,158 +465,392 @@ const h = (tag, props = {}, ...kids) => {
   for (const [k, v] of Object.entries(props || {})) {
     if (k.startsWith("on")) el.addEventListener(k.slice(2), v);
     else if (k === "class") el.className = v;
+    else if (k === "style") el.setAttribute("style", v);
     else if (v === true) el.setAttribute(k, "");
     else if (v !== false && v != null) el.setAttribute(k, v);
   }
   for (const k of kids.flat()) if (k != null && k !== false) el.append(k.nodeType ? k : String(k));
   return el;
 };
-const svg = (path) => {
+const svg = (path, cls) => {
   const s = document.createElementNS("http://www.w3.org/2000/svg", "svg");
   s.setAttribute("viewBox", "0 0 24 24"); s.setAttribute("fill", "none"); s.setAttribute("stroke", "currentColor");
   s.setAttribute("stroke-width", "2"); s.setAttribute("stroke-linecap", "round"); s.setAttribute("stroke-linejoin", "round");
   s.setAttribute("aria-hidden", "true");
+  if (cls) s.setAttribute("class", cls);
   s.innerHTML = path;
   return s;
 };
-const ICON_BACK = '<path d="M15 5l-7 7 7 7"/>';
-const ICON_GEAR = '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>';
-const ICON_CALL = '<path d="M5 4h4l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2"/>';
-const ICON_CAM = '<rect x="3" y="6" width="13" height="12" rx="2"/><path d="M16 10l5-3v10l-5-3"/>';
-const ICON_SEND = '<path d="M5 12h13M13 6l6 6-6 6"/>';
-const MARK = '<svg class="mark" viewBox="0 0 64 64" aria-hidden="true"><rect x="4" y="10" width="20" height="40" rx="5" fill="none" stroke="currentColor" stroke-width="3"/><rect x="40" y="14" width="20" height="40" rx="5" fill="none" stroke="currentColor" stroke-width="3"/><path d="M24 31h16" stroke="var(--line)" stroke-width="4" stroke-linecap="round"/></svg>';
+
+const I = {
+  back: '<path d="M15 5l-7 7 7 7"/>',
+  phone: '<path d="M5 4h4l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2"/>',
+  video: '<rect x="3" y="6" width="13" height="12" rx="2"/><path d="M16 10l5-3v10l-5-3"/>',
+  send: '<path d="M5 12h13M13 6l6 6-6 6"/>',
+  plus: '<path d="M12 5v14M5 12h14"/>',
+  search: '<circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/>',
+  lock: '<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/>',
+  check: '<path d="M5 12l4 4 10-10"/>',
+  checks: '<path d="M2 12l4 4 10-10M11 15.5l.5.5 10-10"/>',
+  clock: '<circle cx="12" cy="12" r="8"/><path d="M12 8v4l3 2"/>',
+  chat: '<path d="M4 5h16v11H9l-5 4z"/>',
+  settings: '<circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M4.2 4.2l2.1 2.1M17.7 17.7l2.1 2.1M2 12h3M19 12h3M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1"/>',
+  link: '<path d="M9 15l6-6M10 6l1-1a4 4 0 0 1 6 6l-1 1M14 18l-1 1a4 4 0 0 1-6-6l1-1"/>',
+  phoneIn: '<path d="M5 4h4l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2"/><path d="M15 3v6h6M21 3l-6 6"/>',
+  phoneOut: '<path d="M5 4h4l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2"/><path d="M21 9V3h-6M15 9l6-6"/>',
+  phoneMissed: '<path d="M5 4h4l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2"/><path d="M15 3l6 6M21 3l-6 6"/>',
+  bell: '<path d="M6 16V11a6 6 0 0 1 12 0v5l2 2H4z"/><path d="M10 21h4"/>',
+  server: '<rect x="4" y="4" width="16" height="7" rx="2"/><rect x="4" y="13" width="16" height="7" rx="2"/><path d="M8 7.5h.01M8 16.5h.01"/>',
+  key: '<circle cx="8" cy="15" r="4"/><path d="M11 12l9-9M17 6l3 3M14 9l2 2"/>',
+  trash: '<path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/>',
+  download: '<path d="M12 4v11M7 10l5 5 5-5M5 20h14"/>',
+};
+const MARK = '<svg class="mark" viewBox="0 0 64 64" aria-hidden="true"><rect x="4" y="10" width="20" height="40" rx="5" fill="none" stroke="currentColor" stroke-width="3"/><rect x="40" y="14" width="20" height="40" rx="5" fill="none" stroke="currentColor" stroke-width="3"/><path d="M24 31h16" stroke="var(--accent)" stroke-width="4" stroke-linecap="round"/></svg>';
 
 const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
 const isStandalone = () => matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
+
+// ---------- Petites aides d'affichage
+
+const TINTS = ["t0", "t1", "t2", "t3", "t4", "t5"];
+function tintFor(name) {
+  let x = 0;
+  for (const ch of String(name)) x = (x * 31 + ch.codePointAt(0)) >>> 0;
+  return TINTS[x % TINTS.length];
+}
+function avatar(name, size = "m", direct = false) {
+  const a = h("span", { class: "avatar " + size + " " + tintFor(name), "aria-hidden": "true" }, String(name || "?")[0].toUpperCase());
+  if (!direct) return a;
+  return h("span", { class: "avatar-wrap" }, a, h("span", { class: "direct-dot", title: "Connexion directe établie" }));
+}
+const timeFmt = new Intl.DateTimeFormat("fr", { hour: "2-digit", minute: "2-digit" });
+const dayFmt = new Intl.DateTimeFormat("fr", { weekday: "long", day: "numeric", month: "long" });
+const shortDay = new Intl.DateTimeFormat("fr", { weekday: "short" });
+const dateFmt = new Intl.DateTimeFormat("fr", { day: "2-digit", month: "2-digit" });
+const startOfDay = (t) => { const d = new Date(t); d.setHours(0, 0, 0, 0); return d.getTime(); };
+function listTime(ts) {
+  const d0 = startOfDay(Date.now()), d = startOfDay(ts), days = Math.round((d0 - d) / 86400000);
+  if (days === 0) return timeFmt.format(ts);
+  if (days === 1) return "Hier";
+  if (days < 7) return shortDay.format(ts);
+  return dateFmt.format(ts);
+}
+function dayLabel(ts) {
+  const days = Math.round((startOfDay(Date.now()) - startOfDay(ts)) / 86400000);
+  if (days === 0) return "Aujourd'hui";
+  if (days === 1) return "Hier";
+  const s = dayFmt.format(ts);
+  return s[0].toUpperCase() + s.slice(1);
+}
+const isDirect = (id) => { const s = sessions.get(id); return !!(s && s.isOpen); };
+
+async function markRead(peerId) {
+  const ms = await msgsFor(peerId);
+  for (const m of ms) if (m.unread) { m.unread = false; await msgPut(m); }
+}
+
+let listTimer = null;
+function scheduleListRefresh() {
+  clearTimeout(listTimer);
+  listTimer = setTimeout(() => { if (state.screen === "home") renderTab(); }, 120);
+}
+
+// ---------- Routage
 
 function render() {
   if (state.screen === "setup") return renderSetup();
   if (state.screen === "home") return renderHome();
   if (state.screen === "chat") return renderChat();
 }
+const renderHome = () => renderTab(true);
+
+// ---------- Bienvenue / inscription
 
 function renderSetup() {
   const err = h("p", { class: "error", role: "alert" });
-  const name = h("input", { type: "text", autocomplete: "off", autocapitalize: "none", spellcheck: "false", maxlength: "20", placeholder: "ex. lina_92", required: true });
-  const server = h("input", { type: "url", placeholder: "https://…workers.dev", value: directoryUrl() });
-  const btn = h("button", { class: "btn", type: "submit", disabled: true }, "Créer mon compte");
+  const name = h("input", { type: "text", id: "username", autocomplete: "off", autocapitalize: "none", spellcheck: "false", maxlength: "20", placeholder: "ex. lina_92", required: true });
+  const server = h("input", { type: "url", id: "server", placeholder: "https://…workers.dev", value: directoryUrl() });
+  const btn = h("button", { class: "btn primary block", type: "submit", disabled: true }, "Créer mon compte");
   name.addEventListener("input", () => {
     name.value = name.value.toLowerCase().replace(/[^a-z0-9_]/g, "");
     btn.disabled = name.value.length < 3;
   });
-  const needServer = !CFG.directoryUrl;
-  const serverField = h("label", { class: "field" }, "Adresse du serveur annuaire",
-    h("small", {}, "Fournie par la personne qui a installé le serveur."), server);
-  const form = h("form", { class: "setup", onsubmit: async (e) => {
+  const serverField = h("div", { class: "field" }, h("label", { for: "server" }, "Adresse du serveur annuaire"),
+    server, h("small", {}, "Fournie par la personne qui a installé le serveur."));
+  const form = h("form", { class: "screen setup", onsubmit: async (e) => {
     e.preventDefault();
     err.textContent = "";
     try { const v = server.value.trim(); if (v !== (CFG.directoryUrl || "")) localStorage.setItem("directoryUrl", v); } catch {}
     btn.disabled = true; btn.textContent = "Création…";
-    try { await register(name.value); state.screen = "home"; render(); }
+    try { await register(name.value); kvSet("directoryUrl", directoryUrl()).catch(() => {}); state.screen = "home"; state.tab = "chats"; render(); }
     catch (x) { err.textContent = x.message; btn.disabled = false; btn.textContent = "Créer mon compte"; }
   } });
-  const mark = h("div"); mark.innerHTML = MARK;
+  const mark = h("div", { class: "mark-wrap" }); mark.innerHTML = MARK;
   form.append(
-    mark.firstChild,
-    h("h1", {}, "P2P Chat"),
-    h("p", {}, "Tes messages vont directement de ton téléphone à celui de ton contact, chiffrés. Aucun serveur ne les lit ni ne les garde."),
-    h("label", { class: "field" }, "Ton nom d'utilisateur", h("small", {}, "3 à 20 caractères : lettres, chiffres, _"), name),
-    needServer ? serverField : h("details", { class: "server" }, h("summary", {}, "Serveur annuaire"), serverField),
-    err, btn,
+    h("div", { class: "setup-body" },
+      mark,
+      h("h1", { class: "display" }, "Écris en direct, sans intermédiaire."),
+      h("p", { class: "lede" }, "Tes messages et tes appels vont de ton téléphone à celui de ton contact, chiffrés. Aucun serveur ne peut les lire."),
+      h("div", { class: "field" }, h("label", { for: "username" }, "Choisis ton nom d'utilisateur"), name, h("small", {}, "3 à 20 caractères : lettres, chiffres, _")),
+      CFG.directoryUrl ? h("details", { class: "server" }, h("summary", {}, "Serveur annuaire"), serverField) : serverField,
+      err),
+    h("div", { class: "setup-foot" }, btn, h("p", { class: "fineprint" }, "Pas d'e-mail, pas de numéro de téléphone.")),
   );
   root.replaceChildren(form);
   name.focus();
 }
 
-function installHint() {
-  if (isStandalone()) return null;
-  if (state.installPrompt) {
-    return h("div", { class: "install-hint" }, h("span", {}, "Installe P2P Chat sur ton écran d'accueil."),
-      h("button", { class: "btn", onclick: async () => { state.installPrompt.prompt(); await state.installPrompt.userChoice; state.installPrompt = null; render(); } }, "Installer"));
-  }
-  if (isIOS) {
-    return h("div", { class: "install-hint" }, h("span", {}, "Pour l'installer : touche le bouton Partager de Safari, puis « Sur l'écran d'accueil »."));
-  }
-  return null;
+// ---------- Accueil : barre d'onglets
+
+function tabBar() {
+  const tab = (id, label, icon) => h("button", {
+    class: "tab" + (state.tab === id ? " on" : ""), "aria-current": state.tab === id ? "page" : false,
+    onclick: () => { if (state.tab !== id) { state.tab = id; renderTab(true); } },
+  }, svg(icon), h("span", {}, label));
+  return h("nav", { class: "tabbar", "aria-label": "Navigation" },
+    tab("chats", "Discussions", I.chat), tab("calls", "Appels", I.phone), tab("settings", "Réglages", I.settings));
 }
 
-async function renderHome() {
-  if (state.screen !== "home") return;
-  const err = h("p", { class: "error", role: "alert", style: "padding:0 16px" });
-  const input = h("input", { type: "text", placeholder: "Nom d'utilisateur", autocapitalize: "none", autocomplete: "off", spellcheck: "false", "aria-label": "Nom d'utilisateur du contact" });
-  const form = h("form", { class: "add", onsubmit: async (e) => {
-    e.preventDefault(); err.textContent = "";
-    try { const c = await addContact(input.value); openChat(c); } catch (x) { err.textContent = x.message; }
-  } }, input, h("button", { class: "btn", type: "submit" }, "Ajouter"));
+function banners() {
+  const out = [];
+  if (!isStandalone()) {
+    if (state.installPrompt) {
+      out.push(h("div", { class: "banner" }, svg(I.download), h("span", {}, "Installe P2P Chat sur ton écran d'accueil."),
+        h("button", { class: "btn primary small", onclick: async () => { state.installPrompt.prompt(); await state.installPrompt.userChoice; state.installPrompt = null; renderTab(true); } }, "Installer")));
+    } else if (isIOS) {
+      out.push(h("div", { class: "banner" }, svg(I.download), h("span", {}, "Pour installer l'app : bouton Partager de Safari, puis « Sur l'écran d'accueil ». Les notifications ne marchent qu'une fois l'app installée.")));
+    }
+  }
+  if (!(isIOS && !isStandalone()) && pushSupported() && Notification.permission !== "granted") {
+    if (Notification.permission === "denied") {
+      out.push(h("div", { class: "banner warn" }, svg(I.bell), h("span", {}, "Notifications bloquées. Autorise-les dans les réglages du téléphone pour recevoir messages et appels app fermée.")));
+    } else {
+      const b = h("button", { class: "btn primary small", onclick: async () => {
+        b.disabled = true;
+        const r = await enablePush(false).catch(() => "server");
+        if (r === "server") alert("Le serveur n'a pas encore les notifications activées (npm run vapid, voir le README).");
+        renderTab(true);
+      } }, "Activer");
+      out.push(h("div", { class: "banner" }, svg(I.bell), h("span", {}, "Reçois messages et appels même quand l'app est fermée."), b));
+    }
+  }
+  return out;
+}
 
-  const contacts = (await contactsAll()).sort((a, b) => a.username.localeCompare(b.username));
+function renderTab(full) {
+  if (state.screen !== "home") return;
+  if (state.tab === "calls") return renderCalls();
+  if (state.tab === "settings") return renderSettings();
+  return renderChats(full);
+}
+
+// ---------- Onglet Discussions
+
+let chatListEl = null;
+async function renderChats(full) {
+  if (full || !chatListEl || !root.contains(chatListEl)) {
+    chatListEl = h("ul", { class: "rows", "aria-label": "Discussions" });
+    const search = h("input", { type: "search", placeholder: "Rechercher", "aria-label": "Rechercher une discussion", value: state.search });
+    search.addEventListener("input", () => { state.search = search.value; fillChatList(); });
+    root.replaceChildren(h("div", { class: "screen" },
+      h("header", { class: "large-head" },
+        h("div", { class: "head-row" },
+          h("h1", { class: "display" }, "Discussions"),
+          h("button", { class: "round-btn tint", "aria-label": "Nouvelle discussion", title: "Nouvelle discussion", onclick: openNewChat }, svg(I.plus))),
+        h("label", { class: "searchbar" }, svg(I.search), search),
+        h("p", { class: "presence" + (state.online ? " on" : "") }, h("span", { class: "dot" }), state.online ? "Connecté · " + state.me.username : "Hors ligne · reconnexion…")),
+      h("div", { class: "scroll" }, ...banners(), chatListEl),
+      tabBar()));
+  }
+  await fillChatList();
+}
+
+async function fillChatList() {
+  if (!chatListEl) return;
+  const q = state.search.trim().toLowerCase();
+  const contacts = await contactsAll();
   const items = await Promise.all(contacts.map(async (c) => {
     const ms = await msgsFor(c.id);
     const last = ms[ms.length - 1];
-    return h("li", {}, h("button", { onclick: () => openChat(c) },
-      h("span", { class: "avatar", "aria-hidden": "true" }, c.username[0].toUpperCase()),
-      h("span", {}, h("div", { class: "name" }, c.username),
-        h("div", { class: "preview" }, last ? (last.outgoing ? "Toi : " : "") + last.text : "Aucun message"))));
+    return { c, last, unread: ms.filter((m) => m.unread).length, ts: last ? last.ts : 0 };
   }));
-  if (state.screen !== "home") return;
-  root.replaceChildren(
-    h("header", { class: "bar" }, h("h2", {}, "Contacts"),
-      h("span", { class: "status" }, h("span", { class: "dot" + (state.online ? " on" : "") }), state.online ? state.me.username : "hors ligne"),
-      h("button", { class: "icon-btn", "aria-label": "Réglages", onclick: openSettings }, svg(ICON_GEAR))),
-    installHint() || "",
-    pushBanner() || "",
-    form, err,
-    items.length ? h("ul", { class: "list" }, items)
-      : h("p", { class: "empty" }, "Ajoute un contact avec son nom d'utilisateur pour commencer. Il doit avoir créé son compte dans P2P Chat, sur Android ou sur le web."),
-  );
+  items.sort((a, b) => b.ts - a.ts || a.c.username.localeCompare(b.c.username));
+  const shown = items.filter((x) => !q || x.c.username.includes(q));
+  if (!items.length) {
+    chatListEl.replaceChildren(h("li", { class: "empty" },
+      h("p", {}, "Aucune discussion pour l'instant."),
+      h("p", { class: "muted" }, "Ajoute un contact avec son nom d'utilisateur. Il doit avoir créé son compte dans P2P Chat, sur Android ou sur le web."),
+      h("button", { class: "btn primary", onclick: openNewChat }, "Ajouter un contact")));
+    return;
+  }
+  if (!shown.length) { chatListEl.replaceChildren(h("li", { class: "empty" }, h("p", { class: "muted" }, "Aucun contact ne correspond à « " + q + " »."))); return; }
+  chatListEl.replaceChildren(...shown.map(({ c, last, unread }) => {
+    let preview = "Aucun message";
+    if (last) preview = (last.kind === "call" ? "" : last.outgoing ? "Toi : " : "") + last.text;
+    return h("li", {}, h("button", { class: "row", onclick: () => openChat(c) },
+      avatar(c.username, "m", isDirect(c.id)),
+      h("span", { class: "row-main" },
+        h("span", { class: "row-top" }, h("span", { class: "row-name" }, c.username),
+          last ? h("span", { class: "row-time" + (unread ? " accent" : "") }, listTime(last.ts)) : ""),
+        h("span", { class: "row-bottom" }, h("span", { class: "row-preview" }, preview),
+          unread ? h("span", { class: "badge", "aria-label": unread + " non lus" }, String(unread)) : ""))));
+  }));
 }
+
+function openNewChat() {
+  const err = h("p", { class: "error", role: "alert" });
+  const input = h("input", { type: "text", placeholder: "Nom d'utilisateur", autocapitalize: "none", autocomplete: "off", spellcheck: "false", "aria-label": "Nom d'utilisateur du contact" });
+  const dlg = h("dialog", { class: "sheet" });
+  const close = () => { dlg.close(); dlg.remove(); };
+  const go = h("button", { class: "btn primary", type: "submit" }, "Ouvrir la discussion");
+  dlg.append(h("form", { class: "stack", onsubmit: async (e) => {
+    e.preventDefault(); err.textContent = ""; go.disabled = true;
+    try { const c = await addContact(input.value); close(); openChat(c); }
+    catch (x) { err.textContent = x.message; go.disabled = false; }
+  } },
+    h("h2", { class: "title" }, "Nouvelle discussion"),
+    h("p", { class: "muted" }, "Écris le nom d'utilisateur de ton contact."),
+    input, err,
+    h("div", { class: "row-actions" }, h("button", { class: "btn ghost", type: "button", onclick: close }, "Annuler"), go)));
+  dlg.addEventListener("cancel", (e) => { e.preventDefault(); close(); });
+  document.body.append(dlg);
+  dlg.showModal();
+  input.focus();
+}
+
+// ---------- Onglet Appels
+
+async function renderCalls() {
+  const filter = state.callFilter || "all";
+  const contacts = await contactsAll();
+  const logs = [];
+  for (const c of contacts) for (const m of await msgsFor(c.id)) if (m.kind === "call") logs.push({ c, m });
+  logs.sort((a, b) => b.m.ts - a.m.ts);
+  const missed = (m) => m.status === "missed" || (!m.status && /manqué/.test(m.text));
+  const shown = filter === "missed" ? logs.filter((x) => missed(x.m)) : logs;
+  const seg = (id, label) => h("button", { class: "seg" + (filter === id ? " on" : ""), "aria-pressed": filter === id ? "true" : "false", onclick: () => { state.callFilter = id; renderCalls(); } }, label);
+  const rows = shown.map(({ c, m }) => {
+    const video = m.video != null ? m.video : /vidéo/i.test(m.text);
+    const miss = missed(m);
+    const icon = miss ? I.phoneMissed : m.outgoing ? I.phoneOut : I.phoneIn;
+    let detail = video ? "Vidéo" : "Audio";
+    if (m.duration) detail += " · " + m.duration;
+    else if (miss) detail += " · manqué";
+    else if (m.status === "declined") detail += " · refusé";
+    else if (m.status === "noanswer") detail += " · sans réponse";
+    return h("li", { class: "row static" },
+      avatar(c.username, "s"),
+      h("button", { class: "row-main link", onclick: () => openChat(c) },
+        h("span", { class: "row-name" + (miss ? " danger" : "") }, c.username),
+        h("span", { class: "row-detail" }, svg(icon, miss ? "danger" : ""), detail + " · " + listTime(m.ts))),
+      h("button", { class: "round-btn tint", "aria-label": (video ? "Appel vidéo" : "Appel audio") + " à " + c.username,
+        onclick: () => window.startCall && window.startCall(c, video) }, svg(video ? I.video : I.phone)));
+  });
+  root.replaceChildren(h("div", { class: "screen" },
+    h("header", { class: "large-head" },
+      h("h1", { class: "display" }, "Appels"),
+      h("div", { class: "segmented", role: "group", "aria-label": "Filtrer" }, seg("all", "Tous"), seg("missed", "Manqués"))),
+    h("div", { class: "scroll" },
+      rows.length ? h("ul", { class: "rows" }, rows)
+        : h("div", { class: "empty" }, h("p", { class: "muted" }, filter === "missed" ? "Aucun appel manqué." : "Aucun appel pour l'instant. Ouvre une discussion et touche le téléphone ou la caméra pour appeler."))),
+    tabBar()));
+}
+
+// ---------- Onglet Réglages
+
+async function renderSettings() {
+  const me = state.me;
+  const fp = me.pubB64.replace(/[^A-Za-z0-9]/g, "").slice(0, 32).toUpperCase().match(/.{4}/g).join(" ");
+  const server = h("input", { type: "url", value: directoryUrl(), "aria-label": "Adresse du serveur annuaire" });
+  const perm = pushSupported() ? Notification.permission : "unsupported";
+  const notifText = { granted: "Activées sur cet appareil", denied: "Bloquées dans les réglages du téléphone", default: "Désactivées", unsupported: isIOS && !isStandalone() ? "Installe d'abord l'app sur l'écran d'accueil" : "Non disponibles sur ce navigateur" }[perm];
+  const notifBtn = perm === "default" ? h("button", { class: "btn primary small", onclick: async (e) => {
+    e.target.disabled = true;
+    const r = await enablePush(false).catch(() => "server");
+    if (r === "server") alert("Le serveur n'a pas encore les notifications activées (npm run vapid, voir le README).");
+    renderSettings();
+  } }, "Activer") : null;
+  root.replaceChildren(h("div", { class: "screen" },
+    h("header", { class: "large-head" }, h("h1", { class: "display" }, "Réglages")),
+    h("div", { class: "scroll settings" },
+      h("section", { class: "profile" }, avatar(me.username, "l"), h("p", { class: "title" }, me.username),
+        h("p", { class: "presence" + (state.online ? " on" : "") }, h("span", { class: "dot" }), state.online ? "Connecté à l'annuaire" : "Hors ligne")),
+      h("section", { class: "group" },
+        h("div", { class: "item" }, svg(I.bell), h("div", { class: "item-main" }, h("span", { class: "item-title" }, "Notifications"), h("span", { class: "item-sub" }, notifText)), notifBtn || ""),
+        h("div", { class: "item" }, svg(I.key), h("div", { class: "item-main" }, h("span", { class: "item-title" }, "Empreinte de ta clé"), h("span", { class: "item-sub mono" }, fp),
+          h("span", { class: "item-sub" }, "Identifiant public de cet appareil. Ta clé privée ne quitte jamais ton téléphone.")))),
+      h("section", { class: "group" },
+        h("form", { class: "item column", onsubmit: (e) => {
+          e.preventDefault();
+          const v = server.value.trim();
+          try { if (v && v !== CFG.directoryUrl) localStorage.setItem("directoryUrl", v); else localStorage.removeItem("directoryUrl"); } catch {}
+          kvSet("directoryUrl", directoryUrl()).catch(() => {});
+          if (socket) { const s = socket; socket = null; s.close(); }
+          connectSocket(); renderSettings();
+        } },
+          h("div", { class: "item-head" }, svg(I.server), h("span", { class: "item-title" }, "Serveur annuaire")),
+          server, h("div", { class: "row-actions" }, h("button", { class: "btn ghost small", type: "submit" }, "Enregistrer")))),
+      h("section", { class: "group" },
+        h("button", { class: "item danger", onclick: async () => {
+          if (!confirm("Supprimer ton compte et tes messages de cet appareil ? Ton nom restera pris sur le serveur.")) return;
+          db.close();
+          await new Promise((r) => { const d = indexedDB.deleteDatabase("p2pchat"); d.onsuccess = d.onerror = d.onblocked = r; });
+          location.reload();
+        } }, svg(I.trash), h("span", { class: "item-title" }, "Effacer cet appareil"))),
+      h("p", { class: "fineprint center" }, "P2P Chat · messages et appels chiffrés de bout en bout")),
+    tabBar()));
+}
+
+// ---------- Conversation
 
 function openChat(c) {
   state.peer = c; state.screen = "chat";
   history.pushState({ chat: c.id }, "");
-  render();
+  markRead(c.id).then(() => render());
   openSession(c.id);
 }
-
 function closeChat() { state.peer = null; state.screen = "home"; render(); }
 window.addEventListener("popstate", () => { if (state.screen === "chat") closeChat(); });
 
 let statusEl = null, threadEl = null;
 function renderChat() {
   const c = state.peer;
-  statusEl = h("div", { class: "status" });
-  threadEl = h("div", { class: "thread", role: "log" });
+  statusEl = h("span", { class: "chip" });
+  threadEl = h("div", { class: "thread", role: "log", "aria-live": "polite" });
   const input = h("input", { type: "text", placeholder: "Message", autocomplete: "off", enterkeyhint: "send", "aria-label": "Message" });
+  const sendBtn = h("button", { class: "send", type: "submit", "aria-label": "Envoyer", disabled: true }, svg(I.send));
+  input.addEventListener("input", () => { sendBtn.disabled = !input.value.trim(); });
   const form = h("form", { class: "composer", onsubmit: (e) => {
     e.preventDefault();
     const t = input.value.trim();
     if (!t) return;
-    input.value = "";
+    input.value = ""; sendBtn.disabled = true;
     sendText(c.id, t);
-  } }, input, h("button", { class: "btn", type: "submit", "aria-label": "Envoyer" }, svg(ICON_SEND)));
-  root.replaceChildren(
-    h("header", { class: "bar" },
-      h("button", { class: "icon-btn", "aria-label": "Retour aux contacts", onclick: () => history.back() }, svg(ICON_BACK)),
-      h("div", { class: "peer-title" }, h("h2", {}, c.username), statusEl),
-      h("button", { class: "icon-btn", "aria-label": "Appel audio", title: "Appel audio", onclick: () => window.startCall && window.startCall(c, false) }, svg(ICON_CALL)),
-      h("button", { class: "icon-btn", "aria-label": "Appel vidéo", title: "Appel vidéo", onclick: () => window.startCall && window.startCall(c, true) }, svg(ICON_CAM))),
-    threadEl, form,
-  );
+    input.focus();
+  } }, input, sendBtn);
+  root.replaceChildren(h("div", { class: "screen chat" },
+    h("header", { class: "chat-head" },
+      h("button", { class: "icon-btn accent", "aria-label": "Retour aux discussions", onclick: () => history.back() }, svg(I.back)),
+      avatar(c.username, "s"),
+      h("div", { class: "who" }, h("h1", { class: "title" }, c.username), statusEl),
+      h("button", { class: "icon-btn accent", "aria-label": "Appel audio", title: "Appel audio", onclick: () => window.startCall && window.startCall(c, false) }, svg(I.phone)),
+      h("button", { class: "icon-btn accent", "aria-label": "Appel vidéo", title: "Appel vidéo", onclick: () => window.startCall && window.startCall(c, true) }, svg(I.video))),
+    threadEl, form));
   renderStatus();
   renderThread();
-  input.focus();
 }
 
 function renderStatus() {
   if (!statusEl || !state.peer) return;
   const s = state.online ? state.peerStatus[state.peer.id] : "me-offline";
-  const text = {
-    direct: "connexion directe, chiffrée",
-    connecting: "connexion…",
-    offline: "hors ligne : tes messages partiront à son retour",
-    "me-offline": "tu es hors ligne",
-  }[s] || "connexion…";
-  statusEl.replaceChildren(h("span", { class: "dot" + (s === "direct" ? " on" : "") }), text);
+  const [cls, text, icon] = {
+    direct: ["chip on", "liaison directe · chiffré", I.link],
+    connecting: ["chip", "connexion…", null],
+    offline: ["chip", "hors ligne · messages remis à son retour", null],
+    "me-offline": ["chip warn", "tu es hors ligne", null],
+  }[s] || ["chip", "connexion…", null];
+  statusEl.className = cls;
+  statusEl.replaceChildren(...(icon ? [svg(icon)] : []), text);
 }
 
 let threadToken = 0;
@@ -635,49 +859,39 @@ async function renderThread() {
   const my = ++threadToken;
   const ms = await msgsFor(state.peer.id);
   if (my !== threadToken || !threadEl) return;
-  const fmt = new Intl.DateTimeFormat("fr", { hour: "2-digit", minute: "2-digit" });
-  threadEl.replaceChildren(
-    ...(ms.length ? [] : [h("p", { class: "note" }, "Les messages passent uniquement entre vos deux appareils. Ils doivent être ouverts tous les deux pour que le message parte.")]),
-    ...ms.map((m) => m.kind === "call"
-      ? h("p", { class: "call-log" }, m.text + " · " + fmt.format(m.ts))
-      : h("div", { class: "msg " + (m.outgoing ? "out" : "in") }, m.text,
-      h("time", {}, fmt.format(m.ts) + (m.outgoing && !m.sent ? " · en attente" : "")))),
-  );
-  threadEl.scrollTop = threadEl.scrollHeight;
-}
-
-async function openSettings() {
-  const server = h("input", { type: "url", value: directoryUrl() });
-  const dlg = h("dialog", {});
-  const close = () => { dlg.close(); dlg.remove(); };
-  dlg.append(h("form", { method: "dialog", class: "stack", onsubmit: (e) => {
-    e.preventDefault();
-    const v = server.value.trim();
-    try { if (v && v !== CFG.directoryUrl) localStorage.setItem("directoryUrl", v); else localStorage.removeItem("directoryUrl"); } catch {}
-    kvSet("directoryUrl", directoryUrl()).catch(() => {});
-    if (socket) { const s = socket; socket = null; s.close(); }
-    connectSocket(); close(); render();
-  } },
-    h("h3", {}, "Réglages"),
-    h("div", {}, h("strong", {}, "Ton nom : "), state.me.username),
-    h("div", {}, h("strong", {}, "Ta clé publique"), h("div", { class: "fp" }, state.me.pubB64)),
-    h("label", { class: "field" }, "Serveur annuaire", server),
-    h("div", { class: "row" },
-      h("button", { class: "btn danger", type: "button", onclick: async () => {
-        if (!confirm("Supprimer ton compte et tes messages de cet appareil ? Ton nom restera pris sur le serveur.")) return;
-        db.close();
-        await new Promise((r) => { const d = indexedDB.deleteDatabase("p2pchat"); d.onsuccess = d.onerror = d.onblocked = r; });
-        location.reload();
-      } }, "Effacer cet appareil"),
-      h("button", { class: "btn ghost", type: "button", onclick: close }, "Fermer"),
-      h("button", { class: "btn", type: "submit" }, "Enregistrer"))));
-  document.body.append(dlg);
-  dlg.showModal();
+  const nodes = [h("div", { class: "line center" }, h("p", { class: "e2e" }, svg(I.lock), h("span", {}, "Messages et appels chiffrés de bout en bout. Même le serveur ne peut pas les lire.")))];
+  let lastDay = null, prev = null;
+  for (const m of ms) {
+    const day = startOfDay(m.ts);
+    if (day !== lastDay) { nodes.push(h("div", { class: "line center" }, h("p", { class: "day" }, dayLabel(m.ts)))); lastDay = day; prev = null; }
+    if (m.kind === "call") {
+      const video = m.video != null ? m.video : /vidéo/i.test(m.text);
+      nodes.push(h("div", { class: "line center" }, h("p", { class: "call-log" }, svg(video ? I.video : I.phone), m.text + " · " + timeFmt.format(m.ts))));
+      prev = null; continue;
+    }
+    const cont = prev && prev.outgoing === m.outgoing && m.ts - prev.ts < 180000;
+    let state_ = null;
+    if (m.outgoing) {
+      if (!m.sent) state_ = h("span", { class: "tick wait", "aria-label": "en attente" }, svg(I.clock));
+      else if (m.relayed) state_ = h("span", { class: "tick", "aria-label": "déposé, sera remis à son retour" }, svg(I.check));
+      else state_ = h("span", { class: "tick ok", "aria-label": "remis" }, svg(I.checks));
+    }
+    nodes.push(h("div", { class: "line " + (m.outgoing ? "end" : "start") + (cont ? " cont" : "") },
+      h("div", { class: "bubble " + (m.outgoing ? "out" : "in") },
+        h("span", { class: "text" }, m.text),
+        h("span", { class: "meta" }, h("time", {}, timeFmt.format(m.ts)), state_ || ""))));
+    prev = m;
+  }
+  if (!ms.length) nodes.push(h("div", { class: "line center" }, h("p", { class: "day" }, "Envoie ton premier message. Il part directement vers le téléphone de " + state.peer.username + ".")));
+  const atBottom = threadEl.scrollHeight - threadEl.scrollTop - threadEl.clientHeight < 80;
+  threadEl.replaceChildren(...nodes);
+  if (atBottom || my <= 2) threadEl.scrollTop = threadEl.scrollHeight;
+  else threadEl.scrollTop = threadEl.scrollHeight;
 }
 
 // ---------------------------------------------------------------- Démarrage
 
-window.addEventListener("beforeinstallprompt", (e) => { e.preventDefault(); state.installPrompt = e; if (state.screen === "home") render(); });
+window.addEventListener("beforeinstallprompt", (e) => { e.preventDefault(); state.installPrompt = e; if (state.screen === "home") renderTab(true); });
 // En arrière-plan, on se déconnecte de l'annuaire : il sait alors qu'il doit envoyer une notification push
 // (sinon un téléphone en veille garderait une connexion « fantôme » et ne serait jamais prévenu).
 document.addEventListener("visibilitychange", () => {
@@ -688,6 +902,7 @@ document.addEventListener("visibilitychange", () => {
   } else {
     if (!socket) connectSocket();
     else fetchMailbox();
+    if (state.screen === "chat" && state.peer) markRead(state.peer.id).then(renderThread);
   }
 });
 
