@@ -67,5 +67,5 @@ La version web installable évite tout cela et s'utilise comme une app (icône, 
 - **Les deux apps doivent être ouvertes** : pas de service en arrière-plan ni de notifications push (FCM / Web Push à ajouter).
 - **Pas de forward secrecy** : X25519 statique + AES-GCM. Remplacer par libsignal (Double Ratchet).
 - **Clés TOFU** : la clé d'un contact est mémorisée à la 1re vue. Ajouter une vérification (numéro de sécurité / QR).
-- **TURN** : ajoute un serveur coturn (`Config.kt` et `iceServers` dans `web/config.js`), sinon certains réseaux mobiles ne se connecteront pas.
+- **TURN** : l'annuaire fournit des identifiants Cloudflare TURN (`GET /ice`) si les secrets `TURN_KEY_ID` et `TURN_KEY_API_TOKEN` sont définis (`npx wrangler secret put …`). L'app Android utilise encore STUN seul (`Config.kt`).
 - Base locale non chiffrée (Room / IndexedDB), pas de limitation de débit sur `/register`.

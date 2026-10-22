@@ -4,7 +4,26 @@
 "use strict";
 
 const CFG = window.P2P_CONFIG || {};
-const ICE_SERVERS = CFG.iceServers || [{ urls: "stun:stun.l.google.com:19302" }];
+const DEFAULT_ICE = CFG.iceServers || [{ urls: ["stun:stun.cloudflare.com:3478", "stun:stun.l.google.com:19302"] }];
+let iceServers = DEFAULT_ICE;
+let iceFetchedAt = 0;
+const currentIceServers = () => iceServers;
+
+/** Récupère auprès de l'annuaire les serveurs STUN/TURN (identifiants TURN temporaires). */
+async function refreshIceServers(force) {
+  const me = state.me, base = directoryUrl();
+  if (!me || !base) return;
+  if (!force && Date.now() - iceFetchedAt < 6 * 3600 * 1000) return;
+  try {
+    const ctl = new AbortController();
+    const t = setTimeout(() => ctl.abort(), 4000);
+    const r = await fetch(base + "/ice?id=" + encodeURIComponent(me.id) + "&token=" + encodeURIComponent(me.token), { signal: ctl.signal });
+    clearTimeout(t);
+    if (!r.ok) return;
+    const j = await r.json();
+    if (Array.isArray(j.iceServers) && j.iceServers.length) { iceServers = j.iceServers; iceFetchedAt = Date.now(); }
+  } catch { /* annuaire ancien ou injoignable : STUN par défaut */ }
+}
 const enc = new TextEncoder();
 const dec = new TextDecoder();
 
@@ -100,7 +119,11 @@ function connectSocket() {
   const url = base.replace(/^http/, "ws") + "/ws?id=" + encodeURIComponent(me.id) + "&token=" + encodeURIComponent(me.token);
   const ws = new WebSocket(url);
   socket = ws;
-  ws.onopen = () => { reconnectDelay = 1000; state.online = true; render(); if (state.peer) openSession(state.peer.id); };
+  ws.onopen = async () => {
+    reconnectDelay = 1000; state.online = true; render();
+    await refreshIceServers();
+    if (state.peer) openSession(state.peer.id);
+  };
   ws.onmessage = (e) => { try { handleSignal(JSON.parse(e.data)); } catch {} };
   ws.onclose = () => {
     if (socket !== ws) return;
@@ -147,7 +170,7 @@ class PeerSession {
     this.remoteSet = false;
     this.dc = null;
     this.closed = false;
-    const pc = (this.pc = new RTCPeerConnection({ iceServers: ICE_SERVERS }));
+    const pc = (this.pc = new RTCPeerConnection({ iceServers: currentIceServers() }));
     pc.onicecandidate = (e) => {
       const c = e.candidate;
       if (!c || !c.candidate) return;

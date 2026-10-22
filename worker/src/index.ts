@@ -3,6 +3,17 @@ import { DurableObject } from "cloudflare:workers";
 export interface Env {
   DB: D1Database;
   HUB: DurableObjectNamespace<Hub>;
+  // Relais Cloudflare TURN (facultatif) : `npx wrangler secret put TURN_KEY_ID` / `TURN_KEY_API_TOKEN`
+  TURN_KEY_ID?: string;
+  TURN_KEY_API_TOKEN?: string;
+}
+
+const STUN = [{ urls: ["stun:stun.cloudflare.com:3478", "stun:stun.l.google.com:19302"] }];
+
+async function authed(env: Env, id: string, token: string): Promise<boolean> {
+  if (!id || !token) return false;
+  const row = await env.DB.prepare("SELECT token_hash FROM users WHERE id = ?1").bind(id).first<{ token_hash: string }>();
+  return !!row && row.token_hash === (await sha256(token));
 }
 
 // CORS : permet à la version web (PWA iPhone / navigateur) d'appeler l'annuaire
@@ -54,13 +65,37 @@ export default {
       return row ? json(row) : json({ error: "Introuvable" }, 404);
     }
 
+    // Serveurs ICE : STUN + identifiants TURN temporaires (24 h), réservés aux comptes inscrits
+    if (req.method === "GET" && url.pathname === "/ice") {
+      if (!(await authed(env, url.searchParams.get("id") ?? "", url.searchParams.get("token") ?? "")))
+        return json({ error: "unauthorized" }, 401);
+      if (!env.TURN_KEY_ID || !env.TURN_KEY_API_TOKEN) return json({ iceServers: STUN, turn: false });
+      try {
+        const r = await fetch(
+          `https://rtc.live.cloudflare.com/v1/turn/keys/${env.TURN_KEY_ID}/credentials/generate-ice-servers`,
+          {
+            method: "POST",
+            headers: { authorization: `Bearer ${env.TURN_KEY_API_TOKEN}`, "content-type": "application/json" },
+            body: JSON.stringify({ ttl: 86400 }),
+          },
+        );
+        if (!r.ok) return json({ iceServers: STUN, turn: false });
+        const d = (await r.json()) as { iceServers?: unknown };
+        const list = (Array.isArray(d.iceServers) ? d.iceServers : [d.iceServers]).filter(Boolean) as any[];
+        // Les navigateurs refusent le port 53 : on le retire.
+        for (const s of list) if (Array.isArray(s.urls)) s.urls = s.urls.filter((u: string) => !/:53\b/.test(u));
+        return json({ iceServers: list.length ? list : STUN, turn: list.length > 0 });
+      } catch {
+        return json({ iceServers: STUN, turn: false });
+      }
+    }
+
     // Signalisation WebRTC (offer / answer / ice) — relais seulement, rien n'est stocké
     if (url.pathname === "/ws" && req.headers.get("Upgrade") === "websocket") {
       const id = url.searchParams.get("id") ?? "";
       // Android envoie le jeton dans l'en-tête ; un navigateur ne peut pas, il l'envoie en paramètre.
       const token = (req.headers.get("Authorization") ?? "").replace("Bearer ", "") || (url.searchParams.get("token") ?? "");
-      const row = await env.DB.prepare("SELECT token_hash FROM users WHERE id = ?1").bind(id).first<{ token_hash: string }>();
-      if (!row || row.token_hash !== (await sha256(token))) return new Response("unauthorized", { status: 401 });
+      if (!(await authed(env, id, token))) return new Response("unauthorized", { status: 401 });
       return env.HUB.get(env.HUB.idFromName("main")).fetch(req);
     }
 
