@@ -1,5 +1,5 @@
 // Garde l'interface disponible hors connexion. Les messages ne passent jamais par ici.
-const CACHE = "p2p-chat-9f51a037";
+const CACHE = "p2p-chat-30aa59f3";
 const SHELL = ["./", "index.html", "app.css", "app.js", "call.js", "crypto.js", "config.js", "vendor/nacl-fast.min.js",
   "manifest.webmanifest", "icons/icon.svg", "icons/icon-192.png", "icons/apple-touch-icon.png"];
 

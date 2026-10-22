@@ -8,6 +8,15 @@
 
 const RING_TIMEOUT = 45000;
 let call = null;
+// Candidats ICE reçus avant que l'appel n'existe localement (l'offre est encore en cours de déchiffrement).
+const earlyIce = new Map(); // callId -> { at, list }
+function keepEarlyIce(m) {
+  const now = Date.now();
+  for (const [k, v] of earlyIce) if (now - v.at > 60000) earlyIce.delete(k);
+  const e = earlyIce.get(m.callId) || { at: now, list: [] };
+  if (e.list.length < 100) e.list.push(m);
+  earlyIce.set(m.callId, e);
+}
 
 const ICON_PHONE = '<path d="M5 4h4l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2"/>';
 const ICON_VIDEO = '<rect x="3" y="6" width="13" height="12" rx="2"/><path d="M16 10l5-3v10l-5-3"/>';
@@ -61,7 +70,7 @@ class Call {
   }
 
   makePc() {
-    const pc = (this.pc = new RTCPeerConnection({ iceServers: ICE_SERVERS }));
+    const pc = (this.pc = new RTCPeerConnection({ iceServers: currentIceServers() }));
     for (const t of this.local.getTracks()) pc.addTrack(t, this.local);
     pc.onicecandidate = (e) => {
       const c = e.candidate;
@@ -79,7 +88,7 @@ class Call {
         clearTimeout(this.timer);
         renderCall();
       } else if (s === "failed") {
-        this.end("Connexion perdue", true);
+        this.end(this.startedAt ? "Connexion perdue" : "Connexion impossible sur ce réseau", true);
       }
     };
   }
@@ -158,7 +167,7 @@ async function startCall(contact, video) {
   const c = (call = new Call(contact, video, true));
   renderCall();
   try {
-    await c.media();
+    await Promise.all([c.media(), refreshIceServers()]);
   } catch (e) {
     c.end(video ? "Accès à la caméra ou au micro refusé" : "Accès au micro refusé", false);
     return;
@@ -181,7 +190,7 @@ async function acceptCall() {
   c.state = "connecting";
   renderCall();
   try {
-    await c.media();
+    await Promise.all([c.media(), refreshIceServers()]);
   } catch {
     c.end("Accès à la caméra ou au micro refusé", true, "error");
     return;
@@ -222,12 +231,17 @@ async function onCallSignal(m) {
     if (call) { sendSignal(from, { type: "call-busy", callId: m.callId }); return; }
     const c = (call = new Call(contact, !!m.video, false, m.callId));
     c.offerSdp = sdp;
+    const early = earlyIce.get(m.callId);
+    if (early) { earlyIce.delete(m.callId); for (const x of early.list) if (x.from === from) c.addIce(x); }
     if (navigator.vibrate) try { navigator.vibrate([400, 200, 400, 200, 400]); } catch {}
     renderCall();
     return;
   }
   const c = call;
-  if (!c || c.peerId !== from || c.id !== m.callId) return;
+  if (!c || c.peerId !== from || c.id !== m.callId) {
+    if (m.type === "call-ice" && typeof m.callId === "string") keepEarlyIce(m);
+    return;
+  }
   if (m.type === "call-answer" && c.outgoing && c.pc && !c.remoteSet) {
     try {
       const sdp = await openSdp(c.contact, m.payload);
