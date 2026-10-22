@@ -3,7 +3,7 @@
 importScripts("config.js", "vendor/nacl-fast.min.js", "crypto.js");
 
 const CACHE = "p2p-chat-__VERSION__";
-const SHELL = ["./", "index.html", "app.css", "app.js", "call.js", "crypto.js", "emoji.js", "emoji-fr.js", "config.js", "vendor/nacl-fast.min.js",
+const SHELL = ["./", "index.html", "app.css", "app.js", "call.js", "crypto.js", "emoji.js", "emoji-fr.js", "vendor/qrcode.min.js", "config.js", "vendor/nacl-fast.min.js",
   "manifest.webmanifest", "icons/icon.svg", "icons/icon-192.png", "icons/badge-96.png", "icons/apple-touch-icon.png"];
 
 self.addEventListener("install", (e) => {
@@ -101,13 +101,15 @@ async function visibleClient() {
 async function onPush(data) {
   if (data.t === "msg") {
     const text = await decryptPreview(data);
+    const ct_ = await idbGet("contacts", data.from).catch(() => null);
     const open = await visibleClient();
     if (open) open.postMessage({ type: "mailbox" });
     return self.registration.showNotification(data.name || "Nouveau message", {
       body: text ? (text.length > 180 ? text.slice(0, 177) + "…" : text) : "Nouveau message chiffré",
       icon: ICON, badge: BADGE,
       tag: "msg-" + data.from,
-      renotify: true,
+      renotify: !(ct_ && (ct_.muted || ct_.blocked)),
+      silent: !!(ct_ && (ct_.muted || ct_.blocked)),
       data: { url: "./?chat=" + encodeURIComponent(data.from) },
     });
   }

@@ -260,6 +260,12 @@ export class Hub extends DurableObject<Env> {
     const from = this.ctx.getTags(ws)[0];
     let m: any;
     try { m = JSON.parse(msg); } catch { return; }
+    // Présence : quels contacts ont l'app ouverte ? (réponse limitée à « connecté ou non »)
+    if (m?.type === "presence" && Array.isArray(m.ids)) {
+      const online = m.ids.slice(0, 200).filter((x: unknown) => typeof x === "string" && x !== from && this.ctx.getWebSockets(x).length > 0);
+      ws.send(JSON.stringify({ type: "presence", online }));
+      return;
+    }
     if (typeof m?.to !== "string") return;
     const out = { ...m, from };
     const peers = this.ctx.getWebSockets(m.to);

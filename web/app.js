@@ -133,6 +133,7 @@ function connectSocket() {
     reconnectDelay = 1000; state.online = true;
     if (state.screen === "chat") renderStatus(); else if (state.screen === "home") renderTab(true);
     fetchMailbox();
+    askPresence();
     await refreshIceServers();
     if (state.peer) openSession(state.peer.id);
     relayAllPending();
@@ -159,6 +160,7 @@ function setPeerStatus(id, s) {
 }
 
 function handleSignal(m) {
+  if (m && m.type === "presence") { onPresence(m.online); return; }
   const from = m.from;
   if (!from || !state.me) return;
   if (m.type === "mailbox") { fetchMailbox(); return; }
@@ -300,7 +302,7 @@ async function flush(peerId) {
 async function receive(peerId, bytes, batch) {
   try {
     const c = await contactFor(peerId);
-    if (!c) return;
+    if (!c || c.blocked) return;
     const j = JSON.parse(dec.decode(await E2E.decrypt(await keyFor(c), bytes)));
     if (typeof j.react === "string" && j.target) {
       const t = await msgGet(String(j.target));
@@ -495,7 +497,7 @@ async function enablePush(silent) {
 }
 
 // ---------------------------------------------------------------- Interface
-// Design : maquettes Figma « P2P Chat — UX/UI » (discussions, conversation, appels, réglages).
+// Design V2 « Verre liquide » : page Figma « V2 · Verre liquide » (P2P Chat — UX/UI).
 
 const root = document.getElementById("root");
 const h = (tag, props = {}, ...kids) => {
@@ -503,7 +505,6 @@ const h = (tag, props = {}, ...kids) => {
   for (const [k, v] of Object.entries(props || {})) {
     if (k.startsWith("on")) el.addEventListener(k.slice(2), v);
     else if (k === "class") el.className = v;
-    else if (k === "style") el.setAttribute("style", v);
     else if (v === true) el.setAttribute(k, "");
     else if (v !== false && v != null) el.setAttribute(k, v);
   }
@@ -519,7 +520,6 @@ const svg = (path, cls) => {
   s.innerHTML = path;
   return s;
 };
-
 const I = {
   back: '<path d="M15 5l-7 7 7 7"/>',
   phone: '<path d="M5 4h4l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2"/>',
@@ -538,31 +538,46 @@ const I = {
   phoneOut: '<path d="M5 4h4l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2"/><path d="M21 9V3h-6M15 9l6-6"/>',
   phoneMissed: '<path d="M5 4h4l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2"/><path d="M15 3l6 6M21 3l-6 6"/>',
   bell: '<path d="M6 16V11a6 6 0 0 1 12 0v5l2 2H4z"/><path d="M10 21h4"/>',
+  bellOff: '<path d="M3 3l18 18M8.5 5.5A6 6 0 0 1 18 11v3M6 11v5l-2 2h12M10 21h4"/>',
   server: '<rect x="4" y="4" width="16" height="7" rx="2"/><rect x="4" y="13" width="16" height="7" rx="2"/><path d="M8 7.5h.01M8 16.5h.01"/>',
-  key: '<circle cx="8" cy="15" r="4"/><path d="M11 12l9-9M17 6l3 3M14 9l2 2"/>',
   trash: '<path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/>',
   download: '<path d="M12 4v11M7 10l5 5 5-5M5 20h14"/>',
   smile: '<circle cx="12" cy="12" r="9"/><path d="M8.5 14.5a4.5 4.5 0 0 0 7 0M9 9.5h.01M15 9.5h.01"/>',
   keyboard: '<rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10"/>',
   copy: '<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h8"/>',
+  qr: '<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><path d="M14 14h3v3M21 14v7h-7M17 21v-3"/>',
+  pin: '<path d="M9 4h6l-1 6 4 4H6l4-4zM12 14v7"/>',
+  block: '<circle cx="12" cy="12" r="9"/><path d="M5.6 5.6l12.8 12.8"/>',
+  shield: '<path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/><path d="M8.5 12l2.5 2.5 4.5-5"/>',
+  sparkle: '<path d="M12 3v4M12 17v4M3 12h4M17 12h4M6 6l2.5 2.5M15.5 15.5L18 18M6 18l2.5-2.5M15.5 8.5L18 6"/>',
+  x: '<path d="M6 6l12 12M18 6L6 18"/>',
 };
 const MARK = '<svg class="mark" viewBox="0 0 64 64" aria-hidden="true"><rect x="4" y="10" width="20" height="40" rx="5" fill="none" stroke="currentColor" stroke-width="3"/><rect x="40" y="14" width="20" height="40" rx="5" fill="none" stroke="currentColor" stroke-width="3"/><path d="M24 31h16" stroke="var(--accent)" stroke-width="4" stroke-linecap="round"/></svg>';
-
 const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
 const isStandalone = () => matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
 
-// ---------- Petites aides d'affichage
-
-const TINTS = ["t0", "t1", "t2", "t3", "t4", "t5"];
-function tintFor(name) {
-  let x = 0;
-  for (const ch of String(name)) x = (x * 31 + ch.codePointAt(0)) >>> 0;
-  return TINTS[x % TINTS.length];
+// ---------- Préférences d'affichage (thème, fond, effets)
+const pref = {
+  get(k, d) { try { return localStorage.getItem(k) ?? d; } catch { return d; } },
+  set(k, v) { try { localStorage.setItem(k, v); } catch {} },
+};
+const darkMq = matchMedia("(prefers-color-scheme: dark)");
+function applyLook() {
+  const t = pref.get("theme", "system");
+  const dark = t === "dark" || (t === "system" && darkMq.matches);
+  document.documentElement.dataset.theme = dark ? "dark" : "light";
+  document.documentElement.dataset.wall = pref.get("wall", "vert");
+  document.documentElement.dataset.fx = pref.get("fx", "on");
+  for (const m of document.querySelectorAll('meta[name="theme-color"]')) m.setAttribute("content", dark ? "#0F1D21" : "#EEF3F1");
 }
-function avatar(name, size = "m", direct = false) {
-  const a = h("span", { class: "avatar " + size + " " + tintFor(name), "aria-hidden": "true" }, String(name || "?")[0].toUpperCase());
-  if (!direct) return a;
-  return h("span", { class: "avatar-wrap" }, a, h("span", { class: "direct-dot", title: "Connexion directe établie" }));
+applyLook();
+darkMq.addEventListener && darkMq.addEventListener("change", applyLook);
+
+// ---------- Aides d'affichage
+const TINTS = ["t0", "t1", "t2", "t3", "t4", "t5"];
+function tintFor(name) { let x = 0; for (const ch of String(name)) x = (x * 31 + ch.codePointAt(0)) >>> 0; return TINTS[x % TINTS.length]; }
+function avatar(name, size = "m", ring = false) {
+  return h("span", { class: "avatar " + size + " " + tintFor(name) + (ring ? " ring" : ""), "aria-hidden": "true" }, String(name || "?")[0].toUpperCase());
 }
 const timeFmt = new Intl.DateTimeFormat("fr", { hour: "2-digit", minute: "2-digit" });
 const dayFmt = new Intl.DateTimeFormat("fr", { weekday: "long", day: "numeric", month: "long" });
@@ -570,7 +585,7 @@ const shortDay = new Intl.DateTimeFormat("fr", { weekday: "short" });
 const dateFmt = new Intl.DateTimeFormat("fr", { day: "2-digit", month: "2-digit" });
 const startOfDay = (t) => { const d = new Date(t); d.setHours(0, 0, 0, 0); return d.getTime(); };
 function listTime(ts) {
-  const d0 = startOfDay(Date.now()), d = startOfDay(ts), days = Math.round((d0 - d) / 86400000);
+  const days = Math.round((startOfDay(Date.now()) - startOfDay(ts)) / 86400000);
   if (days === 0) return timeFmt.format(ts);
   if (days === 1) return "Hier";
   if (days < 7) return shortDay.format(ts);
@@ -580,99 +595,97 @@ function dayLabel(ts) {
   const days = Math.round((startOfDay(Date.now()) - startOfDay(ts)) / 86400000);
   if (days === 0) return "Aujourd'hui";
   if (days === 1) return "Hier";
-  const s = dayFmt.format(ts);
-  return s[0].toUpperCase() + s.slice(1);
+  const s = dayFmt.format(ts); return s[0].toUpperCase() + s.slice(1);
 }
 const isDirect = (id) => { const s = sessions.get(id); return !!(s && s.isOpen); };
+const isLive = (id) => isDirect(id) || state.online && state.presence.has(id);
+const isMissed = (m) => m.kind === "call" && (m.status === "missed" || (!m.status && /manqué/.test(m.text)));
 
 async function markRead(peerId) {
-  const ms = await msgsFor(peerId);
-  for (const m of ms) if (m.unread) { m.unread = false; await msgPut(m); }
+  for (const m of await msgsFor(peerId)) if (m.unread) { m.unread = false; await msgPut(m); }
 }
-
 let listTimer = null;
-function scheduleListRefresh() {
-  clearTimeout(listTimer);
-  listTimer = setTimeout(() => { if (state.screen === "home") renderTab(); }, 120);
+function scheduleListRefresh() { clearTimeout(listTimer); listTimer = setTimeout(() => { if (state.screen === "home") renderTab(); }, 120); }
+
+// ---------- Présence (« En direct maintenant ») : l'annuaire dit seulement qui a l'app ouverte
+state.presence = new Set();
+async function askPresence() {
+  if (!socket || socket.readyState !== 1) return;
+  const ids = (await contactsAll()).map((c) => c.id);
+  if (ids.length) socket.send(JSON.stringify({ type: "presence", ids }));
+}
+setInterval(() => { if (document.visibilityState === "visible" && state.screen !== "setup") askPresence(); }, 20000);
+function onPresence(list) {
+  const next = new Set(Array.isArray(list) ? list : []);
+  const changed = next.size !== state.presence.size || [...next].some((x) => !state.presence.has(x));
+  state.presence = next;
+  if (!changed) return;
+  if (state.screen === "home" && state.tab === "chats") scheduleListRefresh();
+  if (state.screen === "chat") renderStatus();
 }
 
 // ---------- Routage
-
 function render() {
   if (state.screen === "setup") return renderSetup();
-  if (state.screen === "home") return renderHome();
+  if (state.screen === "home") return renderTab(true);
   if (state.screen === "chat") return renderChat();
+  if (state.screen === "profile") return renderProfile();
 }
 const renderHome = () => renderTab(true);
 
-// ---------- Bienvenue / inscription
-
+// ---------- Bienvenue
 function renderSetup() {
   const err = h("p", { class: "error", role: "alert" });
-  const name = h("input", { type: "text", id: "username", autocomplete: "off", autocapitalize: "none", spellcheck: "false", maxlength: "20", placeholder: "ex. lina_92", required: true });
-  const server = h("input", { type: "url", id: "server", placeholder: "https://…workers.dev", value: directoryUrl() });
+  const name = h("input", { class: "input", type: "text", id: "username", autocomplete: "off", autocapitalize: "none", spellcheck: "false", maxlength: "20", placeholder: "ex. lina_92", required: true });
+  const server = h("input", { class: "input", type: "url", id: "server", placeholder: "https://…workers.dev", value: directoryUrl() });
   const btn = h("button", { class: "btn primary block", type: "submit", disabled: true }, "Créer mon compte");
-  name.addEventListener("input", () => {
-    name.value = name.value.toLowerCase().replace(/[^a-z0-9_]/g, "");
-    btn.disabled = name.value.length < 3;
-  });
-  const serverField = h("div", { class: "field" }, h("label", { for: "server" }, "Adresse du serveur annuaire"),
-    server, h("small", {}, "Fournie par la personne qui a installé le serveur."));
+  name.addEventListener("input", () => { name.value = name.value.toLowerCase().replace(/[^a-z0-9_]/g, ""); btn.disabled = name.value.length < 3; });
+  const serverField = h("div", { class: "field" }, h("label", { for: "server" }, "Adresse du serveur annuaire"), server, h("small", {}, "Fournie par la personne qui a installé le serveur."));
   const form = h("form", { class: "screen setup", onsubmit: async (e) => {
-    e.preventDefault();
-    err.textContent = "";
+    e.preventDefault(); err.textContent = "";
     try { const v = server.value.trim(); if (v !== (CFG.directoryUrl || "")) localStorage.setItem("directoryUrl", v); } catch {}
     btn.disabled = true; btn.textContent = "Création…";
     try { await register(name.value); kvSet("directoryUrl", directoryUrl()).catch(() => {}); state.screen = "home"; state.tab = "chats"; render(); }
     catch (x) { err.textContent = x.message; btn.disabled = false; btn.textContent = "Créer mon compte"; }
   } });
-  const mark = h("div", { class: "mark-wrap" }); mark.innerHTML = MARK;
+  const mark = h("div"); mark.innerHTML = MARK;
   form.append(
-    h("div", { class: "setup-body" },
-      mark,
+    h("div", { class: "setup-body" }, mark,
       h("h1", { class: "display" }, "Écris en direct, sans intermédiaire."),
       h("p", { class: "lede" }, "Tes messages et tes appels vont de ton téléphone à celui de ton contact, chiffrés. Aucun serveur ne peut les lire."),
       h("div", { class: "field" }, h("label", { for: "username" }, "Choisis ton nom d'utilisateur"), name, h("small", {}, "3 à 20 caractères : lettres, chiffres, _")),
-      CFG.directoryUrl ? h("details", { class: "server" }, h("summary", {}, "Serveur annuaire"), serverField) : serverField,
-      err),
-    h("div", { class: "setup-foot" }, btn, h("p", { class: "fineprint" }, "Pas d'e-mail, pas de numéro de téléphone.")),
-  );
+      CFG.directoryUrl ? h("details", { class: "server" }, h("summary", {}, "Serveur annuaire"), serverField) : serverField, err),
+    h("div", { class: "setup-foot" }, btn, h("p", { class: "fineprint" }, "Pas d'e-mail, pas de numéro de téléphone.")));
   root.replaceChildren(form);
   name.focus();
 }
 
-// ---------- Accueil : barre d'onglets
-
-function tabBar() {
+// ---------- Accueil : dock flottant (onglets en verre + bouton nouvelle discussion)
+function dock() {
   const tab = (id, label, icon) => h("button", {
     class: "tab" + (state.tab === id ? " on" : ""), "aria-current": state.tab === id ? "page" : false,
     onclick: () => { if (state.tab !== id) { state.tab = id; renderTab(true); } },
   }, svg(icon), h("span", {}, label));
-  return h("nav", { class: "tabbar", "aria-label": "Navigation" },
-    tab("chats", "Discussions", I.chat), tab("calls", "Appels", I.phone), tab("settings", "Réglages", I.settings));
+  return h("div", { class: "dock" },
+    h("nav", { class: "tabbar glass strong", "aria-label": "Navigation" }, tab("chats", "Discussions", I.chat), tab("calls", "Appels", I.phone), tab("settings", "Réglages", I.settings)),
+    state.tab === "chats" ? h("button", { class: "fab", "aria-label": "Nouvelle discussion", title: "Nouvelle discussion", onclick: openNewChat }, svg(I.plus)) : "");
 }
 
 function banners() {
   const out = [];
   if (!isStandalone()) {
     if (state.installPrompt) {
-      out.push(h("div", { class: "banner" }, svg(I.download), h("span", {}, "Installe P2P Chat sur ton écran d'accueil."),
+      out.push(h("div", { class: "banner glass" }, svg(I.download), h("span", {}, "Installe P2P Chat sur ton écran d'accueil."),
         h("button", { class: "btn primary small", onclick: async () => { state.installPrompt.prompt(); await state.installPrompt.userChoice; state.installPrompt = null; renderTab(true); } }, "Installer")));
     } else if (isIOS) {
-      out.push(h("div", { class: "banner" }, svg(I.download), h("span", {}, "Pour installer l'app : bouton Partager de Safari, puis « Sur l'écran d'accueil ». Les notifications ne marchent qu'une fois l'app installée.")));
+      out.push(h("div", { class: "banner glass" }, svg(I.download), h("span", {}, "Pour installer : bouton Partager de Safari, puis « Sur l'écran d'accueil ». Les notifications ne marchent qu'une fois l'app installée.")));
     }
   }
   if (!(isIOS && !isStandalone()) && pushSupported() && Notification.permission !== "granted") {
-    if (Notification.permission === "denied") {
-      out.push(h("div", { class: "banner warn" }, svg(I.bell), h("span", {}, "Notifications bloquées. Autorise-les dans les réglages du téléphone pour recevoir messages et appels app fermée.")));
-    } else {
-      const b = h("button", { class: "btn primary small", onclick: async () => {
-        b.disabled = true;
-        const r = await enablePush(false).catch(() => "server");
-        if (r === "server") alert("Le serveur n'a pas encore les notifications activées (npm run vapid, voir le README).");
-        renderTab(true);
-      } }, "Activer");
-      out.push(h("div", { class: "banner" }, svg(I.bell), h("span", {}, "Reçois messages et appels même quand l'app est fermée."), b));
+    if (Notification.permission === "denied") out.push(h("div", { class: "banner glass warn" }, svg(I.bell), h("span", {}, "Notifications bloquées. Autorise-les dans les réglages du téléphone pour recevoir messages et appels app fermée.")));
+    else {
+      const b = h("button", { class: "btn primary small", onclick: async () => { b.disabled = true; const r = await enablePush(false).catch(() => "server"); if (r === "server") alert("Le serveur n'a pas encore les notifications activées (npm run vapid, voir le README)."); renderTab(true); } }, "Activer");
+      out.push(h("div", { class: "banner glass" }, svg(I.bell), h("span", {}, "Reçois messages et appels même quand l'app est fermée."), b));
     }
   }
   return out;
@@ -686,230 +699,350 @@ function renderTab(full) {
 }
 
 // ---------- Onglet Discussions
-
-let chatListEl = null;
+let chatBodyEl = null;
 async function renderChats(full) {
-  if (full || !chatListEl || !root.contains(chatListEl)) {
-    chatListEl = h("ul", { class: "rows", "aria-label": "Discussions" });
+  if (full || !chatBodyEl || !root.contains(chatBodyEl)) {
+    chatBodyEl = h("div", { class: "chat-body", style: "display:grid;gap:14px" });
     const search = h("input", { type: "search", placeholder: "Rechercher", "aria-label": "Rechercher une discussion", value: state.search });
-    search.addEventListener("input", () => { state.search = search.value; fillChatList(); });
+    search.addEventListener("input", () => { state.search = search.value; fillChats(); });
     root.replaceChildren(h("div", { class: "screen" },
-      h("header", { class: "large-head" },
-        h("div", { class: "head-row" },
-          h("h1", { class: "display" }, "Discussions"),
-          h("button", { class: "round-btn tint", "aria-label": "Nouvelle discussion", title: "Nouvelle discussion", onclick: openNewChat }, svg(I.plus))),
-        h("label", { class: "searchbar" }, svg(I.search), search),
-        h("p", { class: "presence" + (state.online ? " on" : "") }, h("span", { class: "dot" }), state.online ? "Connecté · " + state.me.username : "Hors ligne · reconnexion…")),
-      h("div", { class: "scroll" }, ...banners(), chatListEl),
-      tabBar()));
+      h("div", { class: "home-scroll" },
+        h("div", { class: "head-row" }, h("h1", { class: "display" }, "Discussions"),
+          h("button", { class: "me-btn", "aria-label": "Mes réglages", onclick: () => { state.tab = "settings"; renderTab(true); } }, avatar(state.me.username, "xs"))),
+        h("label", { class: "searchbar glass" }, svg(I.search), search),
+        ...banners(),
+        chatBodyEl),
+      dock()));
   }
-  await fillChatList();
+  await fillChats();
+  askPresence();
 }
 
-async function fillChatList() {
-  if (!chatListEl) return;
+async function fillChats() {
+  if (!chatBodyEl) return;
   const q = state.search.trim().toLowerCase();
+  const filter = state.filter || "all";
   const contacts = await contactsAll();
   const items = await Promise.all(contacts.map(async (c) => {
     const ms = (await msgsFor(c.id)).filter((m) => m.kind !== "react");
     const last = ms[ms.length - 1];
-    return { c, last, unread: ms.filter((m) => m.unread).length, ts: last ? last.ts : 0 };
+    const lastCall = [...ms].reverse().find((m) => m.kind === "call");
+    return { c, last, unread: ms.filter((m) => m.unread).length, ts: last ? last.ts : 0, missed: !!(lastCall && isMissed(lastCall)) };
   }));
-  items.sort((a, b) => b.ts - a.ts || a.c.username.localeCompare(b.c.username));
-  const shown = items.filter((x) => !q || x.c.username.includes(q));
+  items.sort((a, b) => (b.c.pinned ? 1 : 0) - (a.c.pinned ? 1 : 0) || b.ts - a.ts || a.c.username.localeCompare(b.c.username));
+  const unreadChats = items.filter((x) => x.unread).length;
+  const chip = (id, label, count) => h("button", { class: "chip-f glass" + (filter === id ? " on" : ""), "aria-pressed": filter === id ? "true" : "false",
+    onclick: () => { state.filter = id; fillChats(); } }, label, count ? h("span", { class: "count" }, String(count)) : "");
+  const nodes = [h("div", { class: "chips", role: "group", "aria-label": "Filtrer" },
+    chip("all", "Toutes"), chip("unread", "Non lues", unreadChats), chip("live", "En direct"), chip("missed", "Manqués"))];
+  const live = items.filter((x) => isLive(x.c.id));
+  if (live.length && filter === "all" && !q) {
+    nodes.push(h("p", { class: "live-title" }, h("span", { class: "dot" }), "En direct maintenant"),
+      h("div", { class: "live-row" }, ...live.map(({ c }) => h("button", { class: "live", onclick: () => openChat(c), "aria-label": c.username + ", en direct" }, avatar(c.username, "live-a", true), h("span", {}, c.username)))));
+  }
+  let shown = items.filter((x) => !q || x.c.username.includes(q));
+  if (filter === "unread") shown = shown.filter((x) => x.unread);
+  if (filter === "live") shown = shown.filter((x) => isLive(x.c.id));
+  if (filter === "missed") shown = shown.filter((x) => x.missed);
   if (!items.length) {
-    chatListEl.replaceChildren(h("li", { class: "empty" },
-      h("p", {}, "Aucune discussion pour l'instant."),
+    nodes.push(h("div", { class: "card glass strong empty" }, h("p", { class: "title" }, "Aucune discussion"),
       h("p", { class: "muted" }, "Ajoute un contact avec son nom d'utilisateur. Il doit avoir créé son compte dans P2P Chat, sur Android ou sur le web."),
       h("button", { class: "btn primary", onclick: openNewChat }, "Ajouter un contact")));
-    return;
+  } else if (!shown.length) {
+    nodes.push(h("div", { class: "card glass empty" }, h("p", { class: "muted" }, q ? "Aucun contact ne correspond à « " + q + " »." : { unread: "Tout est lu.", live: "Personne n'a l'app ouverte en ce moment.", missed: "Aucun appel manqué." }[filter] || "Rien ici.")));
+  } else {
+    nodes.push(h("ul", { class: "rows card glass strong", "aria-label": "Discussions" }, ...shown.map(({ c, last, unread }) => {
+      let preview = "Aucun message", danger = false;
+      if (last) { preview = (last.kind === "call" ? "" : last.outgoing ? "Toi : " : "") + last.text; danger = isMissed(last); }
+      if (c.blocked) preview = "Bloqué";
+      return h("li", {}, h("button", { class: "row", onclick: () => openChat(c) },
+        avatar(c.username, "m", isLive(c.id)),
+        h("span", { class: "row-main" },
+          h("span", { class: "row-top" }, h("span", { class: "row-name" }, c.username),
+            last ? h("span", { class: "row-time" + (unread ? " accent" : "") }, listTime(last.ts)) : ""),
+          h("span", { class: "row-bottom" }, h("span", { class: "row-preview" + (danger ? " danger" : "") }, preview),
+            c.muted ? h("span", { class: "pin", title: "Notifications coupées" }, svg(I.bellOff)) : "",
+            c.pinned ? h("span", { class: "pin", title: "Épinglée" }, "📌") : "",
+            unread ? h("span", { class: "badge", "aria-label": unread + " non lus" }, String(unread)) : ""))));
+    })));
   }
-  if (!shown.length) { chatListEl.replaceChildren(h("li", { class: "empty" }, h("p", { class: "muted" }, "Aucun contact ne correspond à « " + q + " »."))); return; }
-  chatListEl.replaceChildren(...shown.map(({ c, last, unread }) => {
-    let preview = "Aucun message";
-    if (last) preview = (last.kind === "call" ? "" : last.outgoing ? "Toi : " : "") + last.text;
-    return h("li", {}, h("button", { class: "row", onclick: () => openChat(c) },
-      avatar(c.username, "m", isDirect(c.id)),
-      h("span", { class: "row-main" },
-        h("span", { class: "row-top" }, h("span", { class: "row-name" }, c.username),
-          last ? h("span", { class: "row-time" + (unread ? " accent" : "") }, listTime(last.ts)) : ""),
-        h("span", { class: "row-bottom" }, h("span", { class: "row-preview" }, preview),
-          unread ? h("span", { class: "badge", "aria-label": unread + " non lus" }, String(unread)) : ""))));
-  }));
+  chatBodyEl.replaceChildren(...nodes);
 }
 
 function openNewChat() {
   const err = h("p", { class: "error", role: "alert" });
-  const input = h("input", { type: "text", placeholder: "Nom d'utilisateur", autocapitalize: "none", autocomplete: "off", spellcheck: "false", "aria-label": "Nom d'utilisateur du contact" });
+  const input = h("input", { class: "input", type: "text", placeholder: "Nom d'utilisateur", autocapitalize: "none", autocomplete: "off", spellcheck: "false", "aria-label": "Nom d'utilisateur du contact" });
   const dlg = h("dialog", { class: "sheet" });
   const close = () => { dlg.close(); dlg.remove(); };
   const go = h("button", { class: "btn primary", type: "submit" }, "Ouvrir la discussion");
   dlg.append(h("form", { class: "stack", onsubmit: async (e) => {
     e.preventDefault(); err.textContent = ""; go.disabled = true;
-    try { const c = await addContact(input.value); close(); openChat(c); }
-    catch (x) { err.textContent = x.message; go.disabled = false; }
-  } },
-    h("h2", { class: "title" }, "Nouvelle discussion"),
-    h("p", { class: "muted" }, "Écris le nom d'utilisateur de ton contact."),
-    input, err,
+    try { const c = await addContact(input.value); close(); openChat(c); } catch (x) { err.textContent = x.message; go.disabled = false; }
+  } }, h("h2", { class: "title" }, "Nouvelle discussion"), h("p", { class: "muted" }, "Écris le nom d'utilisateur de ton contact."), input, err,
     h("div", { class: "row-actions" }, h("button", { class: "btn ghost", type: "button", onclick: close }, "Annuler"), go)));
   dlg.addEventListener("cancel", (e) => { e.preventDefault(); close(); });
-  document.body.append(dlg);
-  dlg.showModal();
-  input.focus();
+  document.body.append(dlg); dlg.showModal(); input.focus();
 }
 
 // ---------- Onglet Appels
-
 async function renderCalls() {
   const filter = state.callFilter || "all";
-  const contacts = await contactsAll();
   const logs = [];
-  for (const c of contacts) for (const m of await msgsFor(c.id)) if (m.kind === "call") logs.push({ c, m });
+  for (const c of await contactsAll()) for (const m of await msgsFor(c.id)) if (m.kind === "call") logs.push({ c, m });
   logs.sort((a, b) => b.m.ts - a.m.ts);
-  const missed = (m) => m.status === "missed" || (!m.status && /manqué/.test(m.text));
-  const shown = filter === "missed" ? logs.filter((x) => missed(x.m)) : logs;
+  const shown = filter === "missed" ? logs.filter((x) => isMissed(x.m)) : logs;
   const seg = (id, label) => h("button", { class: "seg" + (filter === id ? " on" : ""), "aria-pressed": filter === id ? "true" : "false", onclick: () => { state.callFilter = id; renderCalls(); } }, label);
   const rows = shown.map(({ c, m }) => {
     const video = m.video != null ? m.video : /vidéo/i.test(m.text);
-    const miss = missed(m);
-    const icon = miss ? I.phoneMissed : m.outgoing ? I.phoneOut : I.phoneIn;
+    const miss = isMissed(m);
     let detail = video ? "Vidéo" : "Audio";
-    if (m.duration) detail += " · " + m.duration;
-    else if (miss) detail += " · manqué";
-    else if (m.status === "declined") detail += " · refusé";
-    else if (m.status === "noanswer") detail += " · sans réponse";
-    return h("li", { class: "row static" },
-      avatar(c.username, "s"),
+    if (m.duration) detail += " · " + m.duration; else if (miss) detail += " · manqué"; else if (m.status === "declined") detail += " · refusé"; else if (m.status === "noanswer") detail += " · sans réponse";
+    return h("li", { class: "row static" }, avatar(c.username, "s"),
       h("button", { class: "row-main link", onclick: () => openChat(c) },
         h("span", { class: "row-name" + (miss ? " danger" : "") }, c.username),
-        h("span", { class: "row-detail" }, svg(icon, miss ? "danger" : ""), detail + " · " + listTime(m.ts))),
-      h("button", { class: "round-btn tint", "aria-label": (video ? "Appel vidéo" : "Appel audio") + " à " + c.username,
-        onclick: () => window.startCall && window.startCall(c, video) }, svg(video ? I.video : I.phone)));
+        h("span", { class: "row-detail" }, svg(miss ? I.phoneMissed : m.outgoing ? I.phoneOut : I.phoneIn, miss ? "danger" : ""), detail + " · " + listTime(m.ts))),
+      h("button", { class: "round-btn tint", "aria-label": (video ? "Appel vidéo" : "Appel audio") + " à " + c.username, onclick: () => window.startCall && window.startCall(c, video) }, svg(video ? I.video : I.phone)));
   });
   root.replaceChildren(h("div", { class: "screen" },
-    h("header", { class: "large-head" },
-      h("h1", { class: "display" }, "Appels"),
-      h("div", { class: "segmented", role: "group", "aria-label": "Filtrer" }, seg("all", "Tous"), seg("missed", "Manqués"))),
-    h("div", { class: "scroll" },
-      rows.length ? h("ul", { class: "rows" }, rows)
-        : h("div", { class: "empty" }, h("p", { class: "muted" }, filter === "missed" ? "Aucun appel manqué." : "Aucun appel pour l'instant. Ouvre une discussion et touche le téléphone ou la caméra pour appeler."))),
-    tabBar()));
+    h("div", { class: "home-scroll" }, h("h1", { class: "display" }, "Appels"),
+      h("div", { class: "segmented", role: "group", "aria-label": "Filtrer" }, seg("all", "Tous"), seg("missed", "Manqués")),
+      rows.length ? h("ul", { class: "rows card glass strong" }, rows)
+        : h("div", { class: "card glass empty" }, h("p", { class: "muted" }, filter === "missed" ? "Aucun appel manqué." : "Aucun appel pour l'instant. Ouvre une discussion et touche le téléphone ou la caméra."))),
+    dock()));
 }
 
 // ---------- Onglet Réglages
-
 async function renderSettings() {
   const me = state.me;
-  const fp = me.pubB64.replace(/[^A-Za-z0-9]/g, "").slice(0, 32).toUpperCase().match(/.{4}/g).join(" ");
-  const server = h("input", { type: "url", value: directoryUrl(), "aria-label": "Adresse du serveur annuaire" });
+  const theme = pref.get("theme", "system"), wall = pref.get("wall", "vert"), fx = pref.get("fx", "on") !== "off";
   const perm = pushSupported() ? Notification.permission : "unsupported";
-  const notifText = { granted: "Activées sur cet appareil", denied: "Bloquées dans les réglages du téléphone", default: "Désactivées", unsupported: isIOS && !isStandalone() ? "Installe d'abord l'app sur l'écran d'accueil" : "Non disponibles sur ce navigateur" }[perm];
-  const notifBtn = perm === "default" ? h("button", { class: "btn primary small", onclick: async (e) => {
-    e.target.disabled = true;
-    const r = await enablePush(false).catch(() => "server");
-    if (r === "server") alert("Le serveur n'a pas encore les notifications activées (npm run vapid, voir le README).");
-    renderSettings();
-  } }, "Activer") : null;
+  const segT = (id, label) => h("button", { class: "seg" + (theme === id ? " on" : ""), "aria-pressed": theme === id ? "true" : "false", onclick: () => { pref.set("theme", id); applyLook(); renderSettings(); } }, label);
+  const swatch = (id, label) => h("button", { class: "wall-sw " + id, "aria-label": "Fond " + label, "aria-pressed": wall === id ? "true" : "false", title: label, onclick: () => { pref.set("wall", id); applyLook(); renderSettings(); } });
+  const sw = (on, label, onclick, disabled) => h("button", { class: "switch", role: "switch", "aria-checked": on ? "true" : "false", "aria-label": label, disabled, onclick });
+  const notifSub = { granted: "Activées sur cet appareil", denied: "Bloquées dans les réglages du téléphone", default: "Désactivées", unsupported: isIOS && !isStandalone() ? "Installe d'abord l'app sur l'écran d'accueil" : "Non disponibles sur ce navigateur" }[perm];
+  const item = (icon, title, sub, right, opts = {}) => h(opts.onclick ? "button" : "div", { class: "item" + (opts.danger ? " danger" : ""), onclick: opts.onclick },
+    h("span", { class: "item-ic" }, svg(icon)), h("span", { class: "item-main" }, h("span", { class: "item-title" }, title), sub ? h("span", { class: "item-sub" }, sub) : ""), right || "");
   root.replaceChildren(h("div", { class: "screen" },
-    h("header", { class: "large-head" }, h("h1", { class: "display" }, "Réglages")),
-    h("div", { class: "scroll settings" },
-      h("section", { class: "profile" }, avatar(me.username, "l"), h("p", { class: "title" }, me.username),
-        h("p", { class: "presence" + (state.online ? " on" : "") }, h("span", { class: "dot" }), state.online ? "Connecté à l'annuaire" : "Hors ligne")),
-      h("section", { class: "group" },
-        h("div", { class: "item" }, svg(I.bell), h("div", { class: "item-main" }, h("span", { class: "item-title" }, "Notifications"), h("span", { class: "item-sub" }, notifText)), notifBtn || ""),
-        h("div", { class: "item" }, svg(I.key), h("div", { class: "item-main" }, h("span", { class: "item-title" }, "Empreinte de ta clé"), h("span", { class: "item-sub mono" }, fp),
-          h("span", { class: "item-sub" }, "Identifiant public de cet appareil. Ta clé privée ne quitte jamais ton téléphone.")))),
-      h("section", { class: "group" },
-        h("form", { class: "item column", onsubmit: (e) => {
-          e.preventDefault();
-          const v = server.value.trim();
-          try { if (v && v !== CFG.directoryUrl) localStorage.setItem("directoryUrl", v); else localStorage.removeItem("directoryUrl"); } catch {}
-          kvSet("directoryUrl", directoryUrl()).catch(() => {});
-          if (socket) { const s = socket; socket = null; s.close(); }
-          connectSocket(); renderSettings();
-        } },
-          h("div", { class: "item-head" }, svg(I.server), h("span", { class: "item-title" }, "Serveur annuaire")),
-          server, h("div", { class: "row-actions" }, h("button", { class: "btn ghost small", type: "submit" }, "Enregistrer")))),
-      h("section", { class: "group" },
-        h("button", { class: "item danger", onclick: async () => {
-          if (!confirm("Supprimer ton compte et tes messages de cet appareil ? Ton nom restera pris sur le serveur.")) return;
-          db.close();
-          await new Promise((r) => { const d = indexedDB.deleteDatabase("p2pchat"); d.onsuccess = d.onerror = d.onblocked = r; });
-          location.reload();
-        } }, svg(I.trash), h("span", { class: "item-title" }, "Effacer cet appareil"))),
+    h("div", { class: "home-scroll" }, h("h1", { class: "display" }, "Réglages"),
+      h("div", { class: "profile-card glass strong" }, avatar(me.username, "m", state.online),
+        h("span", { class: "item-main" }, h("span", { class: "title" }, me.username), h("span", { class: "item-sub" }, (state.online ? "Connecté" : "Hors ligne") + " · clé " + fingerprint(me.pubB64))),
+        h("button", { class: "round-btn tint", "aria-label": "Mon code de vérification", onclick: showMyCode }, svg(I.qr))),
+      h("p", { class: "section-label" }, "Apparence"),
+      h("div", { class: "card-pad glass strong" },
+        h("div", { class: "segmented", role: "group", "aria-label": "Thème" }, segT("system", "Système"), segT("light", "Clair"), segT("dark", "Sombre")),
+        h("span", { class: "item-title" }, "Fond de discussion"),
+        h("div", { class: "walls" }, swatch("vert", "Vert"), swatch("ocean", "Océan"), swatch("prune", "Prune"), swatch("sable", "Sable"), swatch("nuit", "Nuit"))),
+      h("p", { class: "section-label" }, "Notifications et effets"),
+      h("div", { class: "list-card glass strong" },
+        item(I.bell, "Notifications", notifSub, perm === "default" ? sw(false, "Activer les notifications", async (e) => { e.currentTarget.disabled = true; const r = await enablePush(false).catch(() => "server"); if (r === "server") alert("Le serveur n'a pas encore les notifications activées (npm run vapid, voir le README)."); renderSettings(); }) : sw(perm === "granted", "Notifications", null, true)),
+        item(I.sparkle, "Effets et animations", "Pluies d'emoji, emoji animés", sw(fx, "Effets et animations", () => { pref.set("fx", fx ? "off" : "on"); renderSettings(); }))),
+      h("p", { class: "section-label" }, "Confidentialité"),
+      h("div", { class: "list-card glass strong" },
+        item(I.shield, "Mon code de vérification", "À faire scanner par tes contacts", null, { onclick: showMyCode }),
+        item(I.server, "Serveur annuaire", directoryUrl().replace(/^https?:\/\//, ""), null, { onclick: editServer })),
+      h("div", { class: "list-card glass strong" }, item(I.trash, "Effacer cet appareil", "Supprime ton compte et tes messages de ce téléphone", null, { danger: true, onclick: wipeDevice })),
       h("p", { class: "fineprint center" }, "P2P Chat · messages et appels chiffrés de bout en bout")),
-    tabBar()));
+    dock()));
+}
+
+function editServer() {
+  const input = h("input", { class: "input", type: "url", value: directoryUrl(), "aria-label": "Adresse du serveur annuaire" });
+  const dlg = h("dialog", { class: "sheet" });
+  const close = () => { dlg.close(); dlg.remove(); };
+  dlg.append(h("form", { class: "stack", onsubmit: (e) => {
+    e.preventDefault(); const v = input.value.trim();
+    try { if (v && v !== CFG.directoryUrl) localStorage.setItem("directoryUrl", v); else localStorage.removeItem("directoryUrl"); } catch {}
+    kvSet("directoryUrl", directoryUrl()).catch(() => {});
+    if (socket) { const s = socket; socket = null; s.close(); }
+    connectSocket(); close(); renderSettings();
+  } }, h("h2", { class: "title" }, "Serveur annuaire"), input, h("div", { class: "row-actions" }, h("button", { class: "btn ghost", type: "button", onclick: close }, "Annuler"), h("button", { class: "btn primary", type: "submit" }, "Enregistrer"))));
+  document.body.append(dlg); dlg.showModal();
+}
+async function wipeDevice() {
+  if (!confirm("Supprimer ton compte et tes messages de cet appareil ? Ton nom restera pris sur le serveur.")) return;
+  db.close();
+  await new Promise((r) => { const d = indexedDB.deleteDatabase("p2pchat"); d.onsuccess = d.onerror = d.onblocked = r; });
+  location.reload();
+}
+
+// ---------- Vérification du chiffrement (numéro de sécurité + QR, comme Signal)
+const fingerprint = (b64) => b64.replace(/[^A-Za-z0-9]/g, "").slice(0, 12).toUpperCase().match(/.{4}/g).join(" ");
+async function safetyNumber(a, b) {
+  const hash = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode("p2p-chat-safety-v1:" + [a, b].sort().join(":"))));
+  const groups = [];
+  for (let i = 0; i < 9; i++) { const v = ((hash[i * 3] << 16) | (hash[i * 3 + 1] << 8) | hash[i * 3 + 2]) % 100000; groups.push(String(v).padStart(5, "0")); }
+  return [groups.slice(0, 3).join(" "), groups.slice(3, 6).join(" "), groups.slice(6, 9).join(" ")];
+}
+const myCodePayload = () => "p2pchat:1:" + state.me.id + ":" + state.me.pubB64;
+function loadScript(src) {
+  return new Promise((res, rej) => { if (document.querySelector('script[src="' + src + '"]')) return res(); const s = document.createElement("script"); s.src = src; s.onload = res; s.onerror = rej; document.head.append(s); });
+}
+async function qrSvg(text) {
+  await loadScript("vendor/qrcode.min.js");
+  const q = self.qrcode(0, "M"); q.addData(text); q.make();
+  const box = h("div", { class: "qr-box" }); box.innerHTML = q.createSvgTag({ cellSize: 4, margin: 0, scalable: true });
+  return box;
+}
+async function showMyCode() {
+  const dlg = h("dialog", { class: "sheet" });
+  const close = () => { dlg.close(); dlg.remove(); };
+  const qr = await qrSvg(myCodePayload()); qr.style.width = qr.style.height = "220px"; qr.style.margin = "0 auto";
+  dlg.append(h("div", { class: "stack" }, h("h2", { class: "title" }, "Mon code"), h("p", { class: "muted" }, "Fais scanner ce code par ton contact depuis sa fiche contact pour vérifier que vos échanges ne sont pas interceptés."),
+    qr, h("p", { class: "center mono" }, fingerprint(state.me.pubB64)), h("div", { class: "row-actions" }, h("button", { class: "btn primary", onclick: close }, "Fermer"))));
+  dlg.addEventListener("cancel", (e) => { e.preventDefault(); close(); });
+  document.body.append(dlg); dlg.showModal();
+}
+async function scanCode(contact) {
+  let stream;
+  try { stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } }); }
+  catch { alert("Impossible d'ouvrir la caméra."); return; }
+  const video = h("video", { playsinline: true, autoplay: true, muted: true }); video.muted = true; video.srcObject = stream;
+  const msg = h("p", {}, "Vise le code affiché sur le téléphone de " + contact.username + ".");
+  let done = false;
+  const stop = () => { done = true; for (const t of stream.getTracks()) t.stop(); ui.remove(); };
+  const ui = h("div", { class: "scanner", role: "dialog", "aria-label": "Scanner le code" }, video, h("div", { class: "frame" }),
+    h("div", { class: "bar" }, msg, h("button", { class: "btn", onclick: stop }, "Annuler")));
+  document.body.append(ui);
+  const detector = "BarcodeDetector" in self ? new self.BarcodeDetector({ formats: ["qr_code"] }) : null;
+  if (!detector) await loadScript("vendor/jsQR.min.js").catch(() => {});
+  const canvas = document.createElement("canvas"), ctx = canvas.getContext("2d", { willReadFrequently: true });
+  const check = async (text) => {
+    const m = /^p2pchat:1:([^:]+):(.+)$/.exec(text || "");
+    if (!m) return false;
+    stop();
+    if (m[1] === contact.id && m[2] === contact.publicKey) {
+      contact.verified = contact.publicKey; await contactPut(contact);
+      if (navigator.vibrate) try { navigator.vibrate([20, 60, 20]); } catch {}
+      alert("✅ Vérifié : vos échanges avec " + contact.username + " sont bien chiffrés de bout en bout, sans intermédiaire.");
+    } else {
+      alert("⚠️ Ce code ne correspond pas à " + contact.username + ". Ne lui envoie rien de sensible et vérifie avec lui de vive voix.");
+    }
+    render();
+    return true;
+  };
+  const tick = async () => {
+    if (done) return;
+    if (video.readyState >= 2) {
+      try {
+        if (detector) { const r = await detector.detect(video); if (r[0] && await check(r[0].rawValue)) return; }
+        else if (self.jsQR) {
+          const w = canvas.width = Math.min(640, video.videoWidth), hh = canvas.height = Math.round(video.videoHeight * w / video.videoWidth);
+          ctx.drawImage(video, 0, 0, w, hh); const r = self.jsQR(ctx.getImageData(0, 0, w, hh).data, w, hh);
+          if (r && await check(r.data)) return;
+        }
+      } catch {}
+    }
+    setTimeout(tick, 220);
+  };
+  tick();
+}
+
+// ---------- Fiche contact
+async function openProfile(c) {
+  state.peer = c; state.screen = "profile";
+  history.pushState({ profile: c.id }, "");
+  render();
+}
+async function renderProfile() {
+  const c = await contactGet(state.peer.id) || state.peer; state.peer = c;
+  const live = isLive(c.id);
+  const verified = c.verified && c.verified === c.publicKey;
+  const lines = await safetyNumber(state.me.pubB64, c.publicKey);
+  const qr = await qrSvg(myCodePayload());
+  const sw = (on, label, onclick) => h("button", { class: "switch", role: "switch", "aria-checked": on ? "true" : "false", "aria-label": label, onclick });
+  const save = async (patch) => { Object.assign(c, patch); await contactPut(c); renderProfile(); };
+  root.replaceChildren(h("div", { class: "screen" },
+    h("div", { class: "profile-scroll" },
+      h("div", { class: "profile-nav" }, h("button", { class: "round-btn", "aria-label": "Retour", onclick: () => history.back() }, svg(I.back))),
+      h("div", { class: "profile-id" }, avatar(c.username, "l", live), h("h1", { class: "display", style: "font-size:30px;line-height:34px" }, c.username),
+        verified ? h("span", { class: "status-chip ok" }, svg(I.shield), "Vérifié") : h("span", { class: "status-chip" + (live ? " on" : "") }, svg(I.link), isDirect(c.id) ? "liaison directe · chiffré" : live ? "en ligne · chiffré" : "chiffré de bout en bout")),
+      h("div", { class: "actions3" },
+        h("button", { class: "action glass strong", onclick: () => openChat(c, true) }, svg(I.chat), "Message"),
+        h("button", { class: "action glass strong", onclick: () => window.startCall && window.startCall(c, false) }, svg(I.phone), "Audio"),
+        h("button", { class: "action glass strong", onclick: () => window.startCall && window.startCall(c, true) }, svg(I.video), "Vidéo")),
+      h("div", { class: "card-pad glass strong" },
+        h("div", { class: "verify-head" }, svg(verified ? I.shield : I.lock), verified ? "Chiffrement vérifié" : "Vérifier le chiffrement"),
+        h("div", { class: "verify-body" }, qr, h("div", { class: "safety mono" }, ...lines.map((l) => h("span", {}, l)))),
+        h("p", { class: "fineprint" }, "Comparez ce numéro de vive voix : il doit être identique sur vos deux téléphones. Ou scannez le code affiché sur le sien (Réglages > Mon code). Le QR ci-dessus est le tien."),
+        h("button", { class: "btn dark block", onclick: () => scanCode(c) }, verified ? "Scanner à nouveau" : "Scanner son code")),
+      h("div", { class: "list-card glass strong" },
+        h("div", { class: "item" }, h("span", { class: "item-ic" }, svg(I.pin)), h("span", { class: "item-main" }, h("span", { class: "item-title" }, "Épingler la discussion")), sw(!!c.pinned, "Épingler", () => save({ pinned: !c.pinned }))),
+        h("div", { class: "item" }, h("span", { class: "item-ic" }, svg(c.muted ? I.bellOff : I.bell)), h("span", { class: "item-main" }, h("span", { class: "item-title" }, "Notifications"), h("span", { class: "item-sub" }, c.muted ? "Silencieuses" : "Avec son")), sw(!c.muted, "Notifications avec son", () => save({ muted: !c.muted })))),
+      h("div", { class: "list-card glass strong" },
+        h("button", { class: "item danger", onclick: () => { if (c.blocked || confirm("Bloquer " + c.username + " ? Tu ne recevras plus ses messages ni ses appels.")) save({ blocked: !c.blocked }); } },
+          h("span", { class: "item-ic" }, svg(I.block)), h("span", { class: "item-main" }, h("span", { class: "item-title" }, (c.blocked ? "Débloquer " : "Bloquer ") + c.username))),
+        h("button", { class: "item danger", onclick: async () => {
+          if (!confirm("Supprimer la discussion avec " + c.username + " de cet appareil ?")) return;
+          for (const m of await msgsFor(c.id)) await req("msgs", "readwrite", (st) => st.delete(m.id));
+          await req("contacts", "readwrite", (st) => st.delete(c.id));
+          state.peer = null; state.screen = "home"; state.tab = "chats"; history.replaceState(null, ""); render();
+        } }, h("span", { class: "item-ic" }, svg(I.trash)), h("span", { class: "item-main" }, h("span", { class: "item-title" }, "Supprimer la discussion")))))));
 }
 
 // ---------- Conversation
-
-function openChat(c) {
+function openChat(c, replace) {
   state.peer = c; state.screen = "chat";
-  history.pushState({ chat: c.id }, "");
+  if (replace) history.replaceState({ chat: c.id }, ""); else history.pushState({ chat: c.id }, "");
   markRead(c.id).then(() => render());
   openSession(c.id);
 }
 function closeChat() { state.peer = null; state.screen = "home"; render(); }
-window.addEventListener("popstate", () => { if (state.screen === "chat") closeChat(); });
+window.addEventListener("popstate", () => {
+  if (state.screen === "profile" && history.state && history.state.chat) { state.screen = "chat"; render(); return; }
+  if (state.screen === "chat" || state.screen === "profile") closeChat();
+});
 
 let statusEl = null, threadEl = null;
 function renderChat() {
   const c = state.peer;
-  statusEl = h("span", { class: "chip" });
+  statusEl = h("span", { class: "status" });
   threadEl = h("div", { class: "thread", role: "log", "aria-live": "polite" });
-  const input = h("input", { type: "text", placeholder: "Message", autocomplete: "off", enterkeyhint: "send", "aria-label": "Message" });
+  const input = h("input", { type: "text", placeholder: c.blocked ? "Contact bloqué" : "Message", autocomplete: "off", enterkeyhint: "send", "aria-label": "Message", disabled: !!c.blocked });
   const sendBtn = h("button", { class: "send", type: "submit", "aria-label": "Envoyer", disabled: true }, svg(I.send));
   const sync = () => { sendBtn.disabled = !input.value.trim(); };
   input.addEventListener("input", sync);
-  // Clavier d'emoji (remplace le clavier du téléphone, comme WhatsApp)
   let panel = null;
   const emojiBtn = h("button", { class: "icon-btn emoji-toggle", type: "button", "aria-label": "Emoji", "aria-expanded": "false" }, svg(I.smile));
-  const closePanel = () => { if (!panel) return; panel.el.remove(); panel = null; emojiBtn.replaceChildren(svg(I.smile)); emojiBtn.setAttribute("aria-label", "Emoji"); emojiBtn.setAttribute("aria-expanded", "false"); };
+  const closePanel = () => { if (!panel) return; panel.el.remove(); panel = null; chatEl.classList.remove("panel-open"); emojiBtn.replaceChildren(svg(I.smile)); emojiBtn.setAttribute("aria-label", "Emoji"); emojiBtn.setAttribute("aria-expanded", "false"); };
   emojiBtn.addEventListener("click", () => {
     if (panel) { closePanel(); input.focus(); return; }
     input.blur();
-    panel = EMO.picker((e) => {
-      const a = input.selectionStart ?? input.value.length, b = input.selectionEnd ?? input.value.length;
-      input.setRangeText(e, a, b, "end");
-      sync();
-    });
-    chatEl.append(panel.el);
+    panel = EMO.picker((e) => { const a = input.selectionStart ?? input.value.length, b = input.selectionEnd ?? input.value.length; input.setRangeText(e, a, b, "end"); sync(); });
+    chatEl.classList.add("panel-open"); chatEl.append(panel.el);
     emojiBtn.replaceChildren(svg(I.keyboard)); emojiBtn.setAttribute("aria-label", "Clavier"); emojiBtn.setAttribute("aria-expanded", "true");
     requestAnimationFrame(() => { threadEl.scrollTop = threadEl.scrollHeight; });
   });
   input.addEventListener("focus", closePanel);
   const form = h("form", { class: "composer", onsubmit: (e) => {
-    e.preventDefault();
-    const t = input.value.trim();
-    if (!t) return;
-    input.value = ""; sync();
-    sendText(c.id, t);
-    if (!panel) input.focus();
-  } }, emojiBtn, input, sendBtn);
-  const chatEl = h("div", { class: "screen chat" });
+    e.preventDefault(); const t = input.value.trim(); if (!t) return;
+    input.value = ""; sync(); sendText(c.id, t); if (!panel) input.focus();
+  } }, h("div", { class: "field-pill glass strong" }, emojiBtn, input), sendBtn);
+  const chatEl = h("div", { class: "screen chat wall" });
+  chatEl.append(threadEl,
+    h("header", { class: "chat-head glass strong" },
+      h("button", { class: "icon-btn", "aria-label": "Retour aux discussions", onclick: () => history.back() }, svg(I.back)),
+      h("button", { class: "who", "aria-label": "Fiche de " + c.username, onclick: () => openProfile(c) }, avatar(c.username, "s", isLive(c.id)),
+        h("span", { class: "who-text" }, h("span", { class: "title" }, c.username), statusEl)),
+      h("button", { class: "round-btn tint", "aria-label": "Appel audio", title: "Appel audio", onclick: () => window.startCall && window.startCall(c, false) }, svg(I.phone)),
+      h("button", { class: "round-btn tint", "aria-label": "Appel vidéo", title: "Appel vidéo", onclick: () => window.startCall && window.startCall(c, true) }, svg(I.video))),
+    form);
   root.replaceChildren(chatEl);
-  chatEl.append(
-    h("header", { class: "chat-head" },
-      h("button", { class: "icon-btn accent", "aria-label": "Retour aux discussions", onclick: () => history.back() }, svg(I.back)),
-      avatar(c.username, "s"),
-      h("div", { class: "who" }, h("h1", { class: "title" }, c.username), statusEl),
-      h("button", { class: "icon-btn accent", "aria-label": "Appel audio", title: "Appel audio", onclick: () => window.startCall && window.startCall(c, false) }, svg(I.phone)),
-      h("button", { class: "icon-btn accent", "aria-label": "Appel vidéo", title: "Appel vidéo", onclick: () => window.startCall && window.startCall(c, true) }, svg(I.video))),
-    threadEl, form);
   renderStatus();
   renderThread();
 }
 
 function renderStatus() {
   if (!statusEl || !state.peer) return;
-  const s = state.online ? state.peerStatus[state.peer.id] : "me-offline";
+  const id = state.peer.id;
+  let s = state.online ? state.peerStatus[id] : "me-offline";
+  if (s !== "direct" && s !== "me-offline" && state.presence.has(id)) s = "online";
   const [cls, text, icon] = {
-    direct: ["chip on", "liaison directe · chiffré", I.link],
-    connecting: ["chip", "connexion…", null],
-    offline: ["chip", "hors ligne · messages remis à son retour", null],
-    "me-offline": ["chip warn", "tu es hors ligne", null],
-  }[s] || ["chip", "connexion…", null];
+    direct: ["status on", "liaison directe · chiffré", I.link],
+    online: ["status on", "en ligne · connexion…", null],
+    connecting: ["status", "connexion…", null],
+    offline: ["status", "hors ligne · remis à son retour", null],
+    "me-offline": ["status warn", "tu es hors ligne", null],
+  }[s] || ["status", "connexion…", null];
   statusEl.className = cls;
   statusEl.replaceChildren(...(icon ? [svg(icon)] : []), text);
 }
@@ -918,54 +1051,47 @@ let threadToken = 0;
 async function renderThread() {
   if (!threadEl || !state.peer) return;
   const my = ++threadToken;
-  const ms = await msgsFor(state.peer.id);
+  const all = await msgsFor(state.peer.id);
   if (my !== threadToken || !threadEl) return;
-  const nodes = [h("div", { class: "line center" }, h("p", { class: "e2e" }, svg(I.lock), h("span", {}, "Messages et appels chiffrés de bout en bout. Même le serveur ne peut pas les lire.")))];
-  let lastDay = null, prev = null;
-  for (const m of ms) {
+  const ms = all.filter((m) => m.kind !== "react");
+  const nodes = [h("div", { class: "line center" }, h("p", { class: "pill e2e glass" }, svg(I.lock), h("span", {}, "Messages et appels chiffrés de bout en bout. Même le serveur ne peut pas les lire.")))];
+  const same = (a, b) => a && b && !a.kind && !b.kind && a.outgoing === b.outgoing && Math.abs(a.ts - b.ts) < 180000 && startOfDay(a.ts) === startOfDay(b.ts);
+  let lastDay = null;
+  ms.forEach((m, i) => {
     const day = startOfDay(m.ts);
-    if (day !== lastDay) { nodes.push(h("div", { class: "line center" }, h("p", { class: "day" }, dayLabel(m.ts)))); lastDay = day; prev = null; }
+    if (day !== lastDay) { nodes.push(h("div", { class: "line center" }, h("p", { class: "pill glass" }, dayLabel(m.ts)))); lastDay = day; }
     if (m.kind === "call") {
       const video = m.video != null ? m.video : /vidéo/i.test(m.text);
-      nodes.push(h("div", { class: "line center" }, h("p", { class: "call-log" }, svg(video ? I.video : I.phone), m.text + " · " + timeFmt.format(m.ts))));
-      prev = null; continue;
+      nodes.push(h("div", { class: "line center" }, h("p", { class: "pill glass" }, svg(isMissed(m) ? I.phoneMissed : video ? I.video : I.phone), m.text + " · " + timeFmt.format(m.ts))));
+      return;
     }
-    if (m.kind === "react") continue;
-    const cont = prev && prev.outgoing === m.outgoing && m.ts - prev.ts < 180000;
-    let state_ = null;
+    const cont = same(ms[i - 1], m), next = same(m, ms[i + 1]);
+    let tick = null;
     if (m.outgoing) {
-      if (!m.sent) state_ = h("span", { class: "tick wait", "aria-label": "en attente" }, svg(I.clock));
-      else if (m.relayed) state_ = h("span", { class: "tick", "aria-label": "déposé, sera remis à son retour" }, svg(I.check));
-      else state_ = h("span", { class: "tick ok", "aria-label": "remis" }, svg(I.checks));
+      if (!m.sent) tick = h("span", { class: "tick wait", "aria-label": "en attente" }, svg(I.clock));
+      else if (m.relayed) tick = h("span", { class: "tick", "aria-label": "déposé, sera remis à son retour" }, svg(I.check));
+      else tick = h("span", { class: "tick ok", "aria-label": "remis" }, svg(I.checks));
     }
     const jumbo = EMO.jumboCount(m.text);
-    let body;
-    if (jumbo) {
-      body = h("span", { class: "text jumbo j" + jumbo },
-        ...EMO.graphemes(m.text.trim()).filter((g) => g.trim()).map((g, i) => h("span", { class: "je a-" + EMO.animFor(g), style: "animation-delay:" + (i * 0.12) + "s" }, g)));
-    } else {
-      body = h("span", { class: "text" }, m.text);
-    }
+    const body = jumbo
+      ? h("span", { class: "text jumbo j" + jumbo }, ...EMO.graphemes(m.text.trim()).filter((g) => g.trim()).map((g, k) => h("span", { class: "je a-" + EMO.animFor(g), style: "animation-delay:" + (k * 0.12) + "s" }, g)))
+      : h("span", { class: "text" }, m.text);
     const r = m.reactions || {};
     const reacts = [r.me, r.them].filter(Boolean);
-    const reactEl = reacts.length ? h("button", { class: "reacts", type: "button", "aria-label": "Réactions : " + reacts.join(" "), onclick: (e) => { e.stopPropagation(); openReactBar(m, e.currentTarget.closest(".bubble")); } },
+    const reactEl = reacts.length ? h("button", { class: "reacts glass strong", type: "button", "aria-label": "Réactions : " + reacts.join(" "), onclick: (e) => { e.stopPropagation(); openReactBar(m, e.currentTarget.closest(".bubble")); } },
       ...(r.me && r.me === r.them ? [h("span", {}, r.me), h("small", {}, "2")] : reacts.map((x) => h("span", {}, x)))) : "";
     const bubble = h("div", { class: "bubble " + (m.outgoing ? "out" : "in") + (jumbo ? " bare" : "") + (reacts.length ? " has-reacts" : ""), "data-id": m.id, tabindex: "0" },
-      body, h("span", { class: "meta" }, h("time", {}, timeFmt.format(m.ts)), state_ || ""), reactEl);
+      body, h("span", { class: "meta" }, h("time", {}, timeFmt.format(m.ts)), tick || ""), reactEl);
     attachGestures(bubble, m);
-    nodes.push(h("div", { class: "line " + (m.outgoing ? "end" : "start") + (cont ? " cont" : "") + (reacts.length ? " reacted" : "") }, bubble));
-    prev = m;
-  }
-  if (!ms.length) nodes.push(h("div", { class: "line center" }, h("p", { class: "day" }, "Envoie ton premier message. Il part directement vers le téléphone de " + state.peer.username + ".")));
-  const atBottom = threadEl.scrollHeight - threadEl.scrollTop - threadEl.clientHeight < 80;
+    nodes.push(h("div", { class: "line " + (m.outgoing ? "end" : "start") + (cont ? " cont" : "") + (next ? " next" : "") }, bubble));
+  });
+  if (!ms.length) nodes.push(h("div", { class: "line center" }, h("p", { class: "pill glass" }, "Envoie ton premier message à " + state.peer.username + " 👋")));
   threadEl.replaceChildren(...nodes);
-  // Effets plein écran pour les messages qui viennent d'arriver ou de partir
   for (const m of ms) if (freshFx.has(m.id)) {
     freshFx.delete(m.id);
     if (document.visibilityState === "visible") { const fx = EMO.effectFor(m.text); if (fx) { EMO.burst(fx); break; } }
   }
-  if (atBottom || my <= 2) threadEl.scrollTop = threadEl.scrollHeight;
-  else threadEl.scrollTop = threadEl.scrollHeight;
+  threadEl.scrollTop = threadEl.scrollHeight;
 }
 
 // ---------- Réactions : appui long ou double-tap sur une bulle

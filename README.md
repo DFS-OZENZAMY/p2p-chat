@@ -67,6 +67,9 @@ La version web installable évite tout cela et s'utilise comme une app (icône, 
 - **Mise en service** : `npm run setup-db` (nouvelles tables) puis `npm run vapid` (clé des notifications), puis `npx wrangler deploy`.
 - Sur iPhone : iOS 16.4+ et app ajoutée à l'écran d'accueil.
 
+## Interface V2 « verre liquide » (app web)
+D'après la page Figma « V2 · Verre liquide » : éléments flottants translucides, filtres (Toutes / Non lues / En direct / Manqués), rangée « En direct maintenant » (présence via l'annuaire : `{"type":"presence","ids":[…]}` → liste des contacts connectés), fiche contact (épingler, sourdine, bloquer, supprimer), vérification du chiffrement (numéro de sécurité commun + QR à scanner, bibliothèques qrcode-generator et jsQR, MIT/Apache-2.0), thème Système/Clair/Sombre, 5 fonds de discussion, curseur « glisser pour répondre », réactions pendant les appels (canal WebRTC `fx`).
+
 ## Emoji (app web)
 - Clavier d'emoji (`web/emoji.js`) : ~1 900 emoji Unicode ≤ 15, recherche en français, récents, couleur de peau. Données `web/emoji-fr.js` générées depuis emojibase-data (MIT), chargées à la demande.
 - Message composé de 1 à 3 emoji : affiché en grand et animé (cœur qui bat, main qui salue…).
