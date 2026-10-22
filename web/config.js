@@ -1,2 +1,2 @@
-// Remplacé automatiquement au déploiement GitHub Pages (variable de dépôt DIRECTORY_URL).
-window.P2P_CONFIG = { directoryUrl: "" };
+// Remplacé automatiquement au déploiement (variable de dépôt DIRECTORY_URL).
+self.P2P_CONFIG = { directoryUrl: "" };

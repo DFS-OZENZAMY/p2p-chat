@@ -13,3 +13,6 @@ bindings = [{ name = "HUB", class_name = "Hub" }]
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["Hub"]
+
+[vars]
+VAPID_SUBJECT = "https://dfs-ozenzamy.github.io/p2p-chat/"

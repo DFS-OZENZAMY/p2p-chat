@@ -28,7 +28,7 @@ jobs:
           mkdir -p _site/app
           cp -r site/. _site/
           cp -r web/. _site/app/
-          node -e 'const fs=require("fs");fs.writeFileSync("_site/app/config.js","window.P2P_CONFIG = "+JSON.stringify({directoryUrl:process.env.DIRECTORY_URL||""})+";\n")'
+          node -e 'const fs=require("fs");fs.writeFileSync("_site/app/config.js","self.P2P_CONFIG = "+JSON.stringify({directoryUrl:process.env.DIRECTORY_URL||""})+";\n")'
           sed -i "s/__VERSION__/${GITHUB_SHA::8}/" _site/app/sw.js
           grep -rl "__REPO__" _site | xargs -r sed -i "s#__REPO__#$REPO#g"
           touch _site/.nojekyll

@@ -6,7 +6,59 @@
 //   connaissent pas (app Android actuelle) les ignorent : l'appel sonne alors dans le vide.
 "use strict";
 
-const RING_TIMEOUT = 45000;
+const RING_TIMEOUT = 60000; // laisse le temps à un téléphone en veille d'ouvrir l'app depuis la notification
+
+// ---------- Qualité
+// Vidéo : jusqu'à 1080p / 30 i/s, débit max 3,5 Mbit/s (WebRTC baisse tout seul si le réseau ou le téléphone suit mal).
+// Audio : Opus 48 kHz, 64 kbit/s, correction d'erreurs (FEC) pour les réseaux mobiles qui perdent des paquets.
+const VIDEO_MAX_BITRATE = 3_500_000;
+const AUDIO_CONSTRAINTS = { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1, sampleRate: 48000 };
+const videoConstraints = (facing) => ({
+  facingMode: facing,
+  width: { ideal: 1920, max: 1920 },
+  height: { ideal: 1080, max: 1080 },
+  frameRate: { ideal: 30, max: 30 },
+});
+
+/** Ajuste les paramètres Opus annoncés à l'autre téléphone (c'est lui qui encode ce que nous recevons). */
+function tuneSdp(sdp) {
+  const m = sdp.match(/a=rtpmap:(\d+) opus\/48000[^\r\n]*/i);
+  if (!m) return sdp;
+  const pt = m[1];
+  const want = { useinbandfec: "1", usedtx: "0", maxaveragebitrate: "64000", maxplaybackrate: "48000", "sprop-maxcapturerate": "48000", stereo: "0" };
+  const re = new RegExp("a=fmtp:" + pt + " ([^\\r\\n]*)");
+  if (re.test(sdp)) {
+    return sdp.replace(re, (_, params) => {
+      const kv = {};
+      for (const x of params.split(";")) { const [k, v] = x.split("="); if (k) kv[k.trim()] = (v || "").trim(); }
+      Object.assign(kv, want);
+      return "a=fmtp:" + pt + " " + Object.entries(kv).map(([k, v]) => k + "=" + v).join(";");
+    });
+  }
+  return sdp.replace(m[0], m[0] + "\r\na=fmtp:" + pt + " " + Object.entries(want).map(([k, v]) => k + "=" + v).join(";"));
+}
+
+/** Débit vidéo max et priorité, une fois la négociation faite. */
+async function tuneSenders(pc) {
+  for (const sender of pc.getSenders()) {
+    if (!sender.track) continue;
+    try {
+      const p = sender.getParameters();
+      if (!p.encodings || !p.encodings.length) p.encodings = [{}];
+      if (sender.track.kind === "video") {
+        p.encodings[0].maxBitrate = VIDEO_MAX_BITRATE;
+        p.encodings[0].maxFramerate = 30;
+        p.encodings[0].priority = "high";
+        p.degradationPreference = "balanced";
+      } else {
+        p.encodings[0].maxBitrate = 96_000;
+        p.encodings[0].priority = "high";
+        p.encodings[0].networkPriority = "high";
+      }
+      await sender.setParameters(p);
+    } catch { /* paramètre non pris en charge par ce navigateur */ }
+  }
+}
 let call = null;
 // Candidats ICE reçus avant que l'appel n'existe localement (l'offre est encore en cours de déchiffrement).
 const earlyIce = new Map(); // callId -> { at, list }
@@ -32,7 +84,7 @@ const fmtDuration = (ms) => {
 };
 
 async function sealSdp(contact, sdp) {
-  return E2E.b64(await E2E.encrypt(await keyFor(contact), new TextEncoder().encode(sdp)));
+  return E2E.b64(await E2E.encrypt(await keyFor(contact), new TextEncoder().encode(tuneSdp(sdp))));
 }
 async function openSdp(contact, payload) {
   return new TextDecoder().decode(await E2E.decrypt(await keyFor(contact), E2E.unb64(payload)));
@@ -63,10 +115,18 @@ class Call {
   signal(m) { sendSignal(this.peerId, { ...m, callId: this.id }); }
 
   async media() {
-    this.local = await navigator.mediaDevices.getUserMedia({
-      audio: { echoCancellation: true, noiseSuppression: true },
-      video: this.video ? { facingMode: this.facing, width: { ideal: 1280 }, height: { ideal: 720 } } : false,
-    });
+    try {
+      this.local = await navigator.mediaDevices.getUserMedia({
+        audio: AUDIO_CONSTRAINTS,
+        video: this.video ? videoConstraints(this.facing) : false,
+      });
+    } catch (e) {
+      if (e && (e.name === "NotAllowedError" || e.name === "SecurityError")) throw e;
+      // Contraintes trop exigeantes pour cet appareil : réglages simples
+      this.local = await navigator.mediaDevices.getUserMedia({ audio: true, video: this.video ? { facingMode: this.facing } : false });
+    }
+    for (const t of this.local.getAudioTracks()) if ("contentHint" in t) t.contentHint = "speech";
+    for (const t of this.local.getVideoTracks()) if ("contentHint" in t) t.contentHint = "motion";
   }
 
   makePc() {
@@ -83,6 +143,7 @@ class Call {
     pc.onconnectionstatechange = () => {
       const s = pc.connectionState;
       if (s === "connected" && this.state !== "active") {
+        tuneSenders(pc);
         this.state = "active";
         this.startedAt = Date.now();
         clearTimeout(this.timer);
@@ -120,8 +181,9 @@ class Call {
   async flip() {
     const next = this.facing === "user" ? "environment" : "user";
     try {
-      const s = await navigator.mediaDevices.getUserMedia({ video: { facingMode: next } });
+      const s = await navigator.mediaDevices.getUserMedia({ video: videoConstraints(next) });
       const track = s.getVideoTracks()[0];
+      if ("contentHint" in track) track.contentHint = "motion";
       const sender = this.pc && this.pc.getSenders().find((x) => x.track && x.track.kind === "video");
       if (sender) await sender.replaceTrack(track);
       for (const t of this.local.getVideoTracks()) { this.local.removeTrack(t); t.stop(); }
@@ -219,6 +281,10 @@ async function onCallSignal(m) {
     if (call && call.peerId === from && call.state === "calling") call.end("Hors ligne", false);
     return;
   }
+  if (m.type === "call-pushed") {
+    if (call && call.peerId === from && call.id === m.callId) { call.pushed = true; renderCall(); }
+    return;
+  }
   if (m.type === "call-offer") {
     if (call) {
       if (call.id !== m.callId) sendSignal(from, { type: "call-busy", callId: m.callId });
@@ -235,6 +301,9 @@ async function onCallSignal(m) {
     if (early) { earlyIce.delete(m.callId); for (const x of early.list) if (x.from === from) c.addIce(x); }
     if (navigator.vibrate) try { navigator.vibrate([400, 200, 400, 200, 400]); } catch {}
     renderCall();
+    // Ouvert depuis le bouton « Répondre » d'une notification : on décroche directement
+    const pa = window.pendingAnswer;
+    if (pa && pa.callId === m.callId) { window.pendingAnswer = null; if (pa.auto) acceptCall(); }
     return;
   }
   const c = call;
@@ -299,7 +368,7 @@ function renderCall(note) {
   const status = h("p", { class: "call-status" });
   const setStatus = () => {
     status.textContent = {
-      calling: c.pc ? "Ça sonne…" : "Préparation…",
+      calling: !c.pc ? "Préparation…" : c.pushed ? "Ça sonne sur son téléphone…" : "Ça sonne…",
       ringing: c.video ? "Appel vidéo entrant" : "Appel audio entrant",
       connecting: "Connexion…",
       active: fmtDuration(Date.now() - c.startedAt),
@@ -348,4 +417,5 @@ function renderCall(note) {
 }
 
 window.onCallSignal = onCallSignal;
+window.isInCall = () => !!call;
 window.startCall = startCall;

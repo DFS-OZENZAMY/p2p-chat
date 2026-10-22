@@ -1,7 +1,13 @@
 {
   "name": "p2p-chat-directory",
   "private": true,
-  "scripts": { "dev": "wrangler dev", "deploy": "wrangler deploy", "check": "tsc --noEmit" },
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "check": "tsc --noEmit",
+    "vapid": "node vapid.mjs | wrangler secret put VAPID_PRIVATE_JWK",
+    "setup-db": "wrangler d1 execute p2p-chat --remote --file=schema.sql"
+  },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20261019.1",
     "typescript": "^5.6.0",
