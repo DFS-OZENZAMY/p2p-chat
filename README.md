@@ -45,7 +45,7 @@ puis relance les workflows « APK Android » et « Site et app web ». L'APK et 
 ## Builds automatiques
 - **APK Android** : à chaque modification de `app/`, GitHub Actions compile un APK signé et publie une Release (`p2p-chat.apk`).
   La clé de signature est dans les secrets `ANDROID_KEYSTORE_BASE64` / `ANDROID_KEYSTORE_PASSWORD` — ne la change pas, sinon les mises à jour ne s'installeront plus par-dessus.
-- **Site + app web** : à chaque modification de `site/` ou `web/`, publication sur GitHub Pages (`/` = présentation, `/app/` = l'app).
+- **Site + app web** : à chaque modification de `site/` ou `web/`, le site est assemblé et publié sur la branche `gh-pages` (`/` = présentation, `/app/` = l'app).
 
 ## Développement local
 ```bash
