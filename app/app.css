@@ -1,0 +1,119 @@
+:root {
+  color-scheme: light;
+  --paper: #EEF3F1;
+  --surface: #FFFFFF;
+  --ink: #102A33;
+  --muted: #5A6E72;
+  --line: #00A87E;
+  --line-ink: #FFFFFF;
+  --bubble-out: #CDEFE3;
+  --bubble-in: #FFFFFF;
+  --rule: #D3DEDA;
+  --alert: #B4380A;
+  --display: "Bricolage Grotesque", "Avenir Next", "Segoe UI", system-ui, sans-serif;
+  --body: "Atkinson Hyperlegible", -apple-system, "Segoe UI", Roboto, system-ui, sans-serif;
+  box-sizing: border-box;
+  padding-top: env(safe-area-inset-top, 0px);
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --paper: #0F1D21;
+    --surface: #16282D;
+    --ink: #E4EEEB;
+    --muted: #93A7A9;
+    --line: #34D3A4;
+    --line-ink: #062019;
+    --bubble-out: #17463B;
+    --bubble-in: #1D3237;
+    --rule: #24393E;
+    --alert: #FF8A5B;
+  }
+}
+*, *::before, *::after { box-sizing: inherit; }
+html, body { height: 100%; margin: 0; }
+body {
+  background: var(--paper);
+  color: var(--ink);
+  font: 17px/1.45 var(--body);
+  -webkit-font-smoothing: antialiased;
+  overscroll-behavior: none;
+}
+#root { height: 100%; display: flex; flex-direction: column; max-width: 720px; margin: 0 auto; }
+button, input { font: inherit; color: inherit; }
+:focus-visible { outline: 3px solid var(--line); outline-offset: 2px; border-radius: 6px; }
+
+/* ---------- Écran d'accueil / inscription ---------- */
+.setup { flex: 1; display: flex; flex-direction: column; justify-content: center; padding: 28px 24px; gap: 18px; }
+.mark { width: 64px; height: 64px; }
+.setup h1 { font: 800 2.4rem/1.05 var(--display); letter-spacing: -0.02em; margin: 0; }
+.setup p { margin: 0; color: var(--muted); max-width: 32ch; }
+label.field { display: grid; gap: 6px; font-weight: 700; font-size: .95rem; }
+label.field small { font-weight: 400; color: var(--muted); }
+input[type=text], input[type=url] {
+  width: 100%; padding: 13px 14px; border-radius: 12px; border: 1.5px solid var(--rule);
+  background: var(--surface); outline: none;
+}
+input:focus { border-color: var(--line); }
+.btn {
+  appearance: none; border: 0; border-radius: 999px; padding: 13px 22px; font-weight: 700;
+  background: var(--line); color: var(--line-ink); cursor: pointer;
+}
+.btn:disabled { opacity: .45; cursor: default; }
+.btn.ghost { background: transparent; color: var(--ink); border: 1.5px solid var(--rule); }
+.btn.danger { background: transparent; color: var(--alert); border: 1.5px solid currentColor; }
+.error { color: var(--alert); margin: 0; font-size: .95rem; }
+details.server summary { cursor: pointer; color: var(--muted); font-size: .95rem; }
+details.server[open] summary { margin-bottom: 10px; }
+
+/* ---------- En-têtes ---------- */
+header.bar {
+  display: flex; align-items: center; gap: 10px; padding: 10px 12px 10px 16px;
+  border-bottom: 1px solid var(--rule); background: var(--paper);
+  position: sticky; top: 0; z-index: 2;
+}
+header.bar h2 { font: 800 1.35rem/1.1 var(--display); margin: 0; flex: 1; letter-spacing: -0.01em; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.icon-btn { appearance: none; border: 0; background: transparent; width: 44px; height: 44px; border-radius: 12px; display: grid; place-items: center; cursor: pointer; }
+.icon-btn svg { width: 24px; height: 24px; }
+.peer-title { flex: 1; min-width: 0; }
+.peer-title h2 { flex: none; }
+.status { font-size: .85rem; color: var(--muted); display: flex; align-items: center; gap: 6px; }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+.dot.on { background: var(--line); }
+
+/* ---------- Contacts ---------- */
+.add { display: flex; gap: 8px; padding: 14px 16px 6px; }
+.add input { flex: 1; }
+.list { list-style: none; margin: 0; padding: 4px 0 24px; overflow-y: auto; flex: 1; }
+.list button {
+  width: 100%; text-align: left; appearance: none; border: 0; background: transparent; cursor: pointer;
+  display: grid; grid-template-columns: 44px 1fr; gap: 12px; align-items: center; padding: 10px 16px;
+}
+.list button:active { background: var(--surface); }
+.avatar { width: 44px; height: 44px; border-radius: 50%; display: grid; place-items: center; font: 800 1.1rem var(--display); background: var(--bubble-out); }
+.list .name { font-weight: 700; }
+.list .preview { color: var(--muted); font-size: .92rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.empty { padding: 32px 24px; color: var(--muted); max-width: 34ch; }
+.install-hint { margin: 10px 16px 0; padding: 12px 14px; border-radius: 12px; background: var(--surface); border: 1px solid var(--rule); font-size: .93rem; display: flex; gap: 12px; align-items: center; }
+.install-hint span { flex: 1; }
+
+/* ---------- Conversation ---------- */
+.thread { flex: 1; overflow-y: auto; padding: 14px 12px; display: flex; flex-direction: column; gap: 4px; }
+.msg { max-width: 80%; padding: 9px 13px; border-radius: 18px; background: var(--bubble-in); white-space: pre-wrap; overflow-wrap: anywhere; border: 1px solid var(--rule); }
+.msg.out { align-self: flex-end; background: var(--bubble-out); border-color: transparent; border-bottom-right-radius: 6px; }
+.msg.in { align-self: flex-start; border-bottom-left-radius: 6px; }
+.msg time { display: block; font-size: .72rem; color: var(--muted); margin-top: 2px; text-align: right; }
+.thread .note { align-self: center; text-align: center; color: var(--muted); font-size: .88rem; max-width: 34ch; padding: 18px 0; }
+form.composer { display: flex; gap: 8px; padding: 8px 10px 10px; border-top: 1px solid var(--rule); background: var(--paper); }
+form.composer input { flex: 1; border-radius: 999px; }
+
+/* ---------- Réglages ---------- */
+dialog { border: 0; border-radius: 20px; padding: 22px; width: min(92vw, 440px); background: var(--surface); color: var(--ink); }
+dialog::backdrop { background: rgb(0 0 0 / .35); }
+dialog h3 { font: 800 1.3rem var(--display); margin: 0 0 14px; }
+dialog .stack { display: grid; gap: 16px; }
+dialog .row { display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; }
+.fp { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: .9rem; word-spacing: .3em; color: var(--muted); }
+.btn svg { width: 22px; height: 22px; display: block; }
+form.composer .btn { padding: 11px 14px; }
